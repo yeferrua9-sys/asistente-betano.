@@ -1,25 +1,34 @@
 """
 CENTRO DE MANDO QUANT — SPORTS DATA HUB
-FASE 3 — DATOS DEPORTIVOS REALES
+FASE 4A — MOTOR QUANT
 
-Fuente:
+Fuente deportiva:
 TheSportsDB V1 — API gratuita
 
 IMPORTANTE:
-- Los eventos deportivos proceden de TheSportsDB.
-- NO se presentan cuotas inventadas.
-- NO se presentan probabilidades inventadas.
-- El motor Quant todavía NO genera recomendaciones de apuesta.
-- Esta fase construye la capa de datos reales.
+- Los eventos proceden de datos reales de TheSportsDB.
+- No se inventan cuotas.
+- No se inventan probabilidades.
+- El motor Quant queda preparado para recibir cuotas reales.
+- Las métricas solo se calculan cuando existen datos suficientes.
+
+Arquitectura:
+
+CAPA 1 — Datos deportivos
+CAPA 2 — Motor Quant
+CAPA 3 — Cuotas
+CAPA 4 — Centro de Mando
 """
 
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, date
+import math
+
 
 # =========================================================
-# CONFIGURACIÓN
+# CONFIGURACIÓN GENERAL
 # =========================================================
 
 st.set_page_config(
@@ -28,6 +37,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 
 # =========================================================
 # ESTILOS
@@ -91,6 +101,14 @@ st.markdown(
         margin: 15px 0;
     }
 
+    .quant-box {
+        background: #111827;
+        border: 1px solid #374151;
+        border-radius: 14px;
+        padding: 18px;
+        margin: 12px 0;
+    }
+
     .error-box {
         background: #3b1111;
         border: 1px solid #ef4444;
@@ -104,15 +122,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # =========================================================
-# CONFIGURACIÓN THE SPORTS DB
+# THE SPORTS DB
 # =========================================================
 
 TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
 
 
 # =========================================================
-# FUNCIÓN — OBTENER EVENTOS DEL DÍA
+# OBTENER EVENTOS DEL DÍA
 # =========================================================
 
 @st.cache_data(ttl=300)
@@ -157,7 +176,7 @@ def get_events_day(selected_date, sport_filter="Todos"):
 
 
 # =========================================================
-# FUNCIÓN — FORMATEAR HORA
+# FORMATEAR HORA
 # =========================================================
 
 def format_event_time(event):
@@ -180,14 +199,13 @@ def format_event_time(event):
     raw_time = event.get("strTime")
 
     if raw_time:
-
         return raw_time[:5]
 
     return "Hora no disponible"
 
 
 # =========================================================
-# FUNCIÓN — CONSTRUIR DATAFRAME
+# CONSTRUIR DATAFRAME
 # =========================================================
 
 def events_to_dataframe(events):
@@ -233,6 +251,191 @@ def events_to_dataframe(events):
 
 
 # =========================================================
+# MOTOR QUANT — FUNCIONES BASE
+# =========================================================
+
+def implied_probability(decimal_odds):
+
+    """
+    Convierte una cuota decimal en probabilidad implícita.
+
+    Ejemplo:
+    cuota 2.00 -> 50%
+    cuota 1.50 -> 66.67%
+    """
+
+    if decimal_odds is None:
+        return None
+
+    try:
+
+        odds = float(decimal_odds)
+
+        if odds <= 1:
+            return None
+
+        return 1 / odds
+
+    except (ValueError, TypeError):
+
+        return None
+
+
+def calculate_edge(model_probability, market_probability):
+
+    """
+    Edge = probabilidad del modelo
+            - probabilidad implícita del mercado.
+    """
+
+    if model_probability is None:
+        return None
+
+    if market_probability is None:
+        return None
+
+    return model_probability - market_probability
+
+
+def calculate_ev(model_probability, decimal_odds):
+
+    """
+    EV simplificado para una apuesta de cuota decimal.
+
+    EV = (probabilidad × cuota) - 1
+    """
+
+    if model_probability is None:
+        return None
+
+    if decimal_odds is None:
+        return None
+
+    try:
+
+        odds = float(decimal_odds)
+
+        if odds <= 1:
+            return None
+
+        return (model_probability * odds) - 1
+
+    except (ValueError, TypeError):
+
+        return None
+
+
+def calculate_value_score(edge, ev):
+
+    """
+    Value Score interno.
+
+    Se mantiene vacío cuando todavía no existen
+    datos suficientes para hacer una evaluación real.
+    """
+
+    if edge is None or ev is None:
+        return None
+
+    score = (
+        (edge * 100) * 60
+        +
+        (ev * 100) * 40
+    )
+
+    return round(score, 2)
+
+
+def classify_value(value_score):
+
+    """
+    Clasificación descriptiva del Value Score.
+
+    No constituye una recomendación automática.
+    """
+
+    if value_score is None:
+        return "SIN DATOS"
+
+    if value_score >= 10:
+        return "VALUE ALTO"
+
+    if value_score >= 5:
+        return "VALUE MEDIO"
+
+    if value_score > 0:
+        return "VALUE BAJO"
+
+    return "SIN VALUE"
+
+
+def quant_analysis(
+    model_probability=None,
+    decimal_odds=None
+):
+
+    market_probability = implied_probability(
+        decimal_odds
+    )
+
+    edge = calculate_edge(
+        model_probability,
+        market_probability
+    )
+
+    ev = calculate_ev(
+        model_probability,
+        decimal_odds
+    )
+
+    value_score = calculate_value_score(
+        edge,
+        ev
+    )
+
+    classification = classify_value(
+        value_score
+    )
+
+    return {
+        "model_probability": model_probability,
+        "market_probability": market_probability,
+        "edge": edge,
+        "ev": ev,
+        "value_score": value_score,
+        "classification": classification,
+    }
+
+
+# =========================================================
+# FORMATEAR MÉTRICAS
+# =========================================================
+
+def percentage(value):
+
+    if value is None:
+        return "—"
+
+    return f"{value * 100:.2f}%"
+
+
+def signed_percentage(value):
+
+    if value is None:
+        return "—"
+
+    return f"{value * 100:+.2f}%"
+
+
+def number(value):
+
+    if value is None:
+        return "—"
+
+    return f"{value:.2f}"
+
+
+# =========================================================
 # SIDEBAR
 # =========================================================
 
@@ -241,7 +444,7 @@ with st.sidebar:
     st.title("⚙️ Centro de Mando")
 
     st.caption(
-        "Sports Data Hub — FASE 3"
+        "Sports Data Hub — FASE 4A"
     )
 
     st.divider()
@@ -303,7 +506,8 @@ st.markdown(
         <h3>Sports Data Hub</h3>
 
         <p>
-        Plataforma de análisis deportivo con datos reales.
+        Plataforma de análisis deportivo con datos reales
+        y motor cuantitativo en construcción.
         </p>
 
     </div>
@@ -313,7 +517,7 @@ st.markdown(
 
 
 # =========================================================
-# ESTADO DE CONEXIÓN
+# ESTADO GENERAL
 # =========================================================
 
 st.markdown(
@@ -333,12 +537,21 @@ st.markdown(
 
     <br><br>
 
-    Esta pantalla obtiene directamente eventos deportivos
-    desde la API y no utiliza partidos inventados.
+    Los eventos mostrados proceden directamente
+    de la fuente deportiva conectada.
 
     <br><br>
 
-    <b>Cuotas de apuestas:</b> todavía NO conectadas.
+    <b>Motor Quant:</b> 🟢 ACTIVO
+
+    <br>
+
+    <b>Cuotas:</b> 🟡 PENDIENTES DE CONEXIÓN
+
+    <br>
+
+    <b>Probabilidades del modelo:</b>
+    🟡 PENDIENTES DE DATOS / MODELO
 
     </div>
     """,
@@ -406,10 +619,12 @@ if not df.empty:
 
     leagues_count = df["Liga"].nunique()
 
-    countries_count = df["País"].replace(
-        "None",
-        pd.NA
-    ).dropna().nunique()
+    countries_count = (
+        df["País"]
+        .replace("None", pd.NA)
+        .dropna()
+        .nunique()
+    )
 
 else:
 
@@ -505,7 +720,134 @@ else:
 
 
 # =========================================================
-# PARTIDOS / EVENTOS
+# PANEL MOTOR QUANT
+# =========================================================
+
+st.divider()
+
+st.markdown(
+    "## 🧠 Motor Quant"
+)
+
+st.markdown(
+    """
+    <div class="quant-box">
+
+    <b>Estado:</b> 🟢 Motor Quant operativo
+
+    <br><br>
+
+    El motor ya dispone de las funciones matemáticas
+    necesarias para trabajar con:
+
+    <br><br>
+
+    • Probabilidad del modelo<br>
+    • Probabilidad implícita de mercado<br>
+    • Edge<br>
+    • EV<br>
+    • Value Score<br>
+    • Clasificación de valor
+
+    <br><br>
+
+    <b>Importante:</b> todavía no se generan números
+    artificiales. Las métricas permanecen vacías hasta
+    disponer de probabilidades del modelo y cuotas reales.
+
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# DEMOSTRACIÓN MATEMÁTICA DEL MOTOR
+# =========================================================
+
+with st.expander(
+    "🔬 Ver funcionamiento matemático del Motor Quant"
+):
+
+    st.write(
+        "Esta sección permite comprobar el motor sin "
+        "introducirlo todavía en los partidos reales."
+    )
+
+    demo_probability = st.number_input(
+        "Probabilidad hipotética del modelo (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=50.0,
+        step=1.0
+    )
+
+    demo_odds = st.number_input(
+        "Cuota decimal hipotética",
+        min_value=1.01,
+        max_value=100.0,
+        value=2.00,
+        step=0.01
+    )
+
+    demo_model_probability = (
+        demo_probability / 100
+    )
+
+    demo = quant_analysis(
+        model_probability=demo_model_probability,
+        decimal_odds=demo_odds
+    )
+
+    d1, d2, d3, d4 = st.columns(4)
+
+    d1.metric(
+        "Prob. modelo",
+        percentage(
+            demo["model_probability"]
+        )
+    )
+
+    d2.metric(
+        "Prob. mercado",
+        percentage(
+            demo["market_probability"]
+        )
+    )
+
+    d3.metric(
+        "Edge",
+        signed_percentage(
+            demo["edge"]
+        )
+    )
+
+    d4.metric(
+        "EV",
+        signed_percentage(
+            demo["ev"]
+        )
+    )
+
+    st.write(
+        f"**Value Score:** "
+        f"{number(demo['value_score'])}"
+    )
+
+    st.write(
+        f"**Clasificación:** "
+        f"{demo['classification']}"
+    )
+
+    st.caption(
+        "Los valores de esta sección son únicamente "
+        "una demostración matemática y no representan "
+        "una recomendación de apuesta."
+    )
+
+
+# =========================================================
+# EVENTOS DEPORTIVOS
 # =========================================================
 
 st.divider()
@@ -601,18 +943,18 @@ if not filtered_df.empty:
 
 
 # =========================================================
-# INFORMACIÓN TÉCNICA
+# ARQUITECTURA
 # =========================================================
 
 st.divider()
 
 st.markdown(
-    "## 🧠 Arquitectura actual"
+    "## 🧠 Arquitectura del sistema"
 )
 
 st.markdown(
     """
-    ### CAPA 1 — Datos deportivos
+    ### CAPA 1 — Datos deportivos 🟢
 
     TheSportsDB proporciona:
 
@@ -625,30 +967,37 @@ st.markdown(
     - Países
     - IDs de eventos
 
-    ### CAPA 2 — Motor Quant
+    ---
 
-    🚧 En construcción.
+    ### CAPA 2 — Motor Quant 🟢
 
-    Esta capa será responsable de calcular posteriormente:
+    El motor ya está preparado para calcular:
 
-    - Probabilidades
+    - Probabilidad implícita
     - Edge
     - EV
     - Value Score
-    - Ranking de oportunidades
+    - Clasificación de valor
 
-    ### CAPA 3 — Cuotas
+    **Todavía no recibe probabilidades propias ni cuotas
+    reales, por lo que no genera recomendaciones.**
 
-    🚧 Pendiente.
+    ---
 
-    Aquí incorporaremos una fuente de cuotas de apuestas
-    para comparar mercados y casas de apuestas.
+    ### CAPA 3 — Cuotas 🟡
 
-    ### CAPA 4 — Centro de Mando
+    Pendiente de conectar una fuente real de cuotas.
 
-    Finalmente tendremos:
+    Esta capa proporcionará los precios de mercado
+    necesarios para comparar contra el modelo.
 
-    **Datos → Modelo → Cuotas → Comparación → Value → Ranking**
+    ---
+
+    ### CAPA 4 — Centro de Mando 🟢
+
+    El objetivo final será:
+
+    **Datos → Modelo → Cuotas → Comparación → Edge → EV → Value → Ranking**
     """
 )
 
@@ -661,5 +1010,5 @@ st.divider()
 
 st.caption(
     "Centro de Mando Quant — Sports Data Hub | "
-    "FASE 3 — Datos deportivos reales"
+    "FASE 4A — Motor Quant"
 )
