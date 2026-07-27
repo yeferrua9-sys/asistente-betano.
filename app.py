@@ -1,5 +1,5 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 12 (Versión Estable y Veloz)
+Dashboard de Asistente de Inversiones Deportivas - FASE 12.1 (Conexión Estable y Veloz)
 """
 
 import streamlit as st
@@ -80,8 +80,8 @@ def obtener_radar_estable(api_key: str) -> pd.DataFrame:
             "oddsFormat": "decimal"
         }
         try:
-            # Timeout reducido a 4 segundos para evitar que la página se congele si una liga tarda
-            respuesta = requests.get(url, params=params, timeout=4)
+            # Timeout ampliado a 12 segundos para dar margen correcto de conexión
+            respuesta = requests.get(url, params=params, timeout=12)
             if respuesta.status_code != 200: 
                 continue
             datos_json = respuesta.json()
@@ -168,7 +168,7 @@ def obtener_radar_estable(api_key: str) -> pd.DataFrame:
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo"
                 })
 
-                # Mercado de Jugadores simulados / estimados con base en el equipo
+                # Mercado de Jugadores estimados
                 filas.append({
                     "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": f"Delantero Estrella ({equipo_local}): Más de 1.5 Remates al Arco", "Mercado": "Remates de Jugador",
