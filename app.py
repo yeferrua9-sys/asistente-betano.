@@ -1,12 +1,12 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 5 (Radar Masivo + Micro-Mercados)
+Dashboard de Asistente de Inversiones Deportivas - FASE 6 (Filtro Estricto de Hoy)
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import combinations
 
 API_KEY = "a60bb46a59d961cb702b89106cb51856"
@@ -46,14 +46,17 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
-    # Buscamos en múltiples deportes/ligas para asegurar volumen masivo de partidos
     sports_keys = [
         "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", 
         "soccer_germany_bundesliga", "soccer_france_ligue_one", 
-        "soccer_conmebol_copa_libertadores", "basketball_nba"
+        "soccer_conmebol_copa_libertadores", "basketball_nba",
+        "soccer_copa_america", "soccer_uefa_champions_league"
     ]
     
     filas = []
+    hoy = datetime.now()
+    limite_futuro = hoy + timedelta(days=4) # Solo partidos de los próximos 4 días máximo
+    
     for sport_key in sports_keys:
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
         params = {
@@ -71,16 +74,20 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
             continue
             
         for evento in datos_json:
+            fecha_iso = evento.get('commence_time', '')
+            try:
+                dt_evento = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00").split("+")[0])
+                # FILTRO ESTRICTO: Descartar si pasa de 4 días o si ya pasó
+                if dt_evento > limite_futuro or dt_evento < hoy - timedelta(hours=2):
+                    continue
+                fecha_str = dt_evento.strftime("%d/%m/%Y %H:%M")
+            except:
+                fecha_str = fecha_iso
+
             liga = evento.get('sport_title', 'Fútbol Global')
             equipo_local = evento.get('home_team')
             equipo_visitante = evento.get('away_team')
             partido = f"{equipo_local} vs {equipo_visitante}"
-            
-            fecha_iso = evento.get('commence_time', '')
-            try:
-                fecha = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
-            except:
-                fecha = fecha_iso
 
             for bookmaker in evento.get('bookmakers', []):
                 casa_apuestas = bookmaker['title']
@@ -94,9 +101,8 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                         linea = outcome.get('point', '—')
                         probabilidad = round((1 / cuota) * 100, 1)
                         
-                        # 1. Registro del mercado principal real
                         filas.append({
-                            "Fecha": fecha,
+                            "Fecha": fecha_str,
                             "Liga": liga,
                             "Partido": partido,
                             "Selección": seleccion,
@@ -108,11 +114,10 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                             "Tipo": "Principal"
                         })
                         
-                        # 2. Extensión inteligente a Micro-Mercados (Esquinas, Faltas, Tiros al Arco)
-                        # Derivamos proyecciones lógicas basadas en las cuotas del partido
+                        # Micro-mercados derivados inteligentes
                         if tipo_mercado == "totals" and cuota < 2.20:
                             filas.append({
-                                "Fecha": fecha,
+                                "Fecha": fecha_str,
                                 "Liga": liga,
                                 "Partido": partido,
                                 "Selección": f"{equipo_local} (Derivado)",
@@ -124,19 +129,7 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                                 "Tipo": "Micro-Mercado"
                             })
                             filas.append({
-                                "Fecha": fecha,
-                                "Liga": liga,
-                                "Partido": partido,
-                                "Selección": f"Jugador Destacado ({equipo_local})",
-                                "Mercado": "Tiros al Arco del Jugador (> 1.5)",
-                                "Línea": "1.5",
-                                "Cuota": round(cuota * 1.1 + 0.3, 2),
-                                "Probabilidad de Éxito (%)": max(50.0, probabilidad - 10),
-                                "Casa de Apuestas": casa_apuestas,
-                                "Tipo": "Micro-Mercado"
-                            })
-                            filas.append({
-                                "Fecha": fecha,
+                                "Fecha": fecha_str,
                                 "Liga": liga,
                                 "Partido": partido,
                                 "Selección": f"Total Partido",
@@ -187,30 +180,30 @@ def armar_combinada_sugerida(df: pd.DataFrame, min_prob: float) -> dict | None:
     return mejor_combo
 
 with st.sidebar:
-    st.title("⚙️ Filtros Masivos")
-    st.caption("Radar Global Activo")
+    st.title("⚙️ Filtros En Vivo")
+    st.caption("Filtro estricto: Próximos 4 días")
     st.divider()
-    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 50, 95, 70, 1)
-    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 50, 90, 60, 1)
+    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 50, 95, 65, 1)
+    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 50, 90, 55, 1)
     st.divider()
-    if st.button("🔄 Refrescar Radar Masivo"):
+    if st.button("🔄 Refrescar Radar"):
         st.cache_data.clear()
         st.rerun()
 
 df_mercados = obtener_radar_masivo(API_KEY)
 
-st.title("📊 Centro de Mando Quant — Radar Masivo")
-st.markdown("##### Apuestas Principales y Micro-Mercados Derivados (Faltas, Esquinas, Tiros)")
+st.title("📊 Centro de Mando Quant — En Vivo")
+st.markdown("##### Partidos cercanos (Hoy y próximos días) + Micro-Mercados")
 
 if df_mercados.empty:
-    st.warning("Buscando eventos disponibles en las próximas horas...")
+    st.warning("No hay partidos de las ligas principales en este rango de fecha exacta (estamos en periodo de transición de verano europeo). Intenta refrescar o ajustar los umbrales.")
     st.stop()
 
 df_sencillas_top = obtener_sencillas_top(df_mercados, umbral=umbral_sencillas)
 combinada_sugerida = armar_combinada_sugerida(df_mercados, min_prob=umbral_combinada)
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Partidos en Radar", df_mercados["Partido"].nunique())
+c1.metric("Partidos Cercanos", df_mercados["Partido"].nunique())
 c2.metric("Opciones Totales", len(df_mercados))
 c3.metric("Micro-Mercados", len(df_mercados[df_mercados["Tipo"] == "Micro-Mercado"]))
 c4.metric("Casa Principal", df_mercados["Casa de Apuestas"].iloc[0])
@@ -227,7 +220,7 @@ with col_izq:
             use_container_width=True, hide_index=True
         )
     else:
-        st.info("Sube o baja el umbral izquierdo para mostrar más opciones.")
+        st.info("Baja el umbral de seguridad en el menú izquierdo para ver más opciones disponibles.")
 
 with col_der:
     st.markdown("**🔥 Combinada Sugerida (Bet Builder)**")
