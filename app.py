@@ -1,34 +1,29 @@
 """
 CENTRO DE MANDO QUANT — SPORTS DATA HUB
-FASE 4A — MOTOR QUANT
+FASE 4B — CUOTAS REALES + MOTOR QUANT
 
-Fuente deportiva:
-TheSportsDB V1 — API gratuita
+CAPAS:
+1. TheSportsDB → eventos deportivos reales
+2. The Odds API → cuotas reales
+3. Motor Quant → probabilidad implícita, Edge, EV, Value Score
+4. Centro de Mando → ranking de oportunidades
 
 IMPORTANTE:
-- Los eventos proceden de datos reales de TheSportsDB.
-- No se inventan cuotas.
-- No se inventan probabilidades.
-- El motor Quant queda preparado para recibir cuotas reales.
-- Las métricas solo se calculan cuando existen datos suficientes.
-
-Arquitectura:
-
-CAPA 1 — Datos deportivos
-CAPA 2 — Motor Quant
-CAPA 3 — Cuotas
-CAPA 4 — Centro de Mando
+- NO se inventan cuotas.
+- NO se inventan probabilidades.
+- Las métricas Quant solo aparecen cuando existen cuotas reales.
+- La API Key de The Odds API se introduce mediante Streamlit Secrets.
 """
 
 import streamlit as st
 import pandas as pd
 import requests
+
 from datetime import datetime, date
-import math
 
 
 # =========================================================
-# CONFIGURACIÓN GENERAL
+# CONFIGURACIÓN
 # =========================================================
 
 st.set_page_config(
@@ -85,6 +80,15 @@ st.markdown(
         margin-bottom: 12px;
     }
 
+    .odds-badge {
+        background: #30220a;
+        border: 1px solid #f59e0b;
+        border-radius: 8px;
+        padding: 8px 12px;
+        display: inline-block;
+        margin-bottom: 12px;
+    }
+
     .info-box {
         background: #111827;
         border: 1px solid #374151;
@@ -101,20 +105,12 @@ st.markdown(
         margin: 15px 0;
     }
 
-    .quant-box {
+    .quant-card {
         background: #111827;
         border: 1px solid #374151;
-        border-radius: 14px;
+        border-radius: 12px;
         padding: 18px;
-        margin: 12px 0;
-    }
-
-    .error-box {
-        background: #3b1111;
-        border: 1px solid #ef4444;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 15px 0;
+        margin: 10px 0;
     }
 
     </style>
@@ -124,18 +120,67 @@ st.markdown(
 
 
 # =========================================================
-# THE SPORTS DB
+# API — THESPORTSDB
 # =========================================================
 
-TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
+TSDB_BASE_URL = (
+    "https://www.thesportsdb.com/api/v1/json/123"
+)
 
 
 # =========================================================
-# OBTENER EVENTOS DEL DÍA
+# API — THE ODDS API
+# =========================================================
+
+ODDS_BASE_URL = (
+    "https://api.the-odds-api.com/v4"
+)
+
+
+# =========================================================
+# MAPEO DE DEPORTES
+# =========================================================
+
+ODDS_SPORTS = {
+    "Soccer": {
+        "soccer_epl": "Premier League",
+        "soccer_uefa_champs_league": "Champions League",
+        "soccer_uefa_europa_league": "Europa League",
+        "soccer_spain_la_liga": "La Liga",
+        "soccer_italy_serie_a": "Serie A",
+        "soccer_germany_bundesliga": "Bundesliga",
+    },
+
+    "Basketball": {
+        "basketball_nba": "NBA",
+        "basketball_wnba": "WNBA",
+        "basketball_ncaab": "NCAAB",
+    },
+
+    "Baseball": {
+        "baseball_mlb": "MLB",
+    },
+
+    "Ice Hockey": {
+        "icehockey_nhl": "NHL",
+    },
+
+    "American Football": {
+        "americanfootball_nfl": "NFL",
+        "americanfootball_ncaaf": "NCAAF",
+    },
+}
+
+
+# =========================================================
+# THE SPORTSB DB — EVENTOS
 # =========================================================
 
 @st.cache_data(ttl=300)
-def get_events_day(selected_date, sport_filter="Todos"):
+def get_events_day(
+    selected_date,
+    sport_filter="Todos"
+):
 
     url = f"{TSDB_BASE_URL}/eventsday.php"
 
@@ -205,7 +250,7 @@ def format_event_time(event):
 
 
 # =========================================================
-# CONSTRUIR DATAFRAME
+# EVENTOS → DATAFRAME
 # =========================================================
 
 def events_to_dataframe(events):
@@ -251,188 +296,279 @@ def events_to_dataframe(events):
 
 
 # =========================================================
-# MOTOR QUANT — FUNCIONES BASE
+# THE ODDS API — OBTENER CUOTAS
 # =========================================================
 
-def implied_probability(decimal_odds):
+@st.cache_data(ttl=120)
+def get_odds(
+    api_key,
+    sport_key,
+    regions="us,uk,eu",
+    markets="h2h"
+):
 
-    """
-    Convierte una cuota decimal en probabilidad implícita.
+    if not api_key:
 
-    Ejemplo:
-    cuota 2.00 -> 50%
-    cuota 1.50 -> 66.67%
-    """
+        return [], "NO_API_KEY"
 
-    if decimal_odds is None:
-        return None
+    url = (
+        f"{ODDS_BASE_URL}/sports/"
+        f"{sport_key}/odds"
+    )
 
-    try:
-
-        odds = float(decimal_odds)
-
-        if odds <= 1:
-            return None
-
-        return 1 / odds
-
-    except (ValueError, TypeError):
-
-        return None
-
-
-def calculate_edge(model_probability, market_probability):
-
-    """
-    Edge = probabilidad del modelo
-            - probabilidad implícita del mercado.
-    """
-
-    if model_probability is None:
-        return None
-
-    if market_probability is None:
-        return None
-
-    return model_probability - market_probability
-
-
-def calculate_ev(model_probability, decimal_odds):
-
-    """
-    EV simplificado para una apuesta de cuota decimal.
-
-    EV = (probabilidad × cuota) - 1
-    """
-
-    if model_probability is None:
-        return None
-
-    if decimal_odds is None:
-        return None
+    params = {
+        "apiKey": api_key,
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": "decimal",
+    }
 
     try:
 
-        odds = float(decimal_odds)
+        response = requests.get(
+            url,
+            params=params,
+            timeout=20
+        )
 
-        if odds <= 1:
-            return None
+        if response.status_code == 401:
+            return [], "INVALID_API_KEY"
 
-        return (model_probability * odds) - 1
+        if response.status_code == 429:
+            return [], "RATE_LIMIT"
 
-    except (ValueError, TypeError):
+        if response.status_code != 200:
+            return [], f"HTTP {response.status_code}"
 
+        data = response.json()
+
+        if not data:
+            return [], "NO_ODDS"
+
+        return data, "OK"
+
+    except requests.RequestException as error:
+
+        return [], f"ERROR_CONNECTION: {error}"
+
+    except ValueError:
+
+        return [], "ERROR_JSON"
+
+
+# =========================================================
+# CUOTAS → DATAFRAME
+# =========================================================
+
+def odds_to_dataframe(odds_data):
+
+    rows = []
+
+    for event in odds_data:
+
+        home = event.get("home_team")
+        away = event.get("away_team")
+
+        bookmakers = event.get(
+            "bookmakers",
+            []
+        )
+
+        for bookmaker in bookmakers:
+
+            bookmaker_name = bookmaker.get(
+                "title",
+                "Casa desconocida"
+            )
+
+            markets = bookmaker.get(
+                "markets",
+                []
+            )
+
+            for market in markets:
+
+                market_key = market.get(
+                    "key"
+                )
+
+                outcomes = market.get(
+                    "outcomes",
+                    []
+                )
+
+                for outcome in outcomes:
+
+                    outcome_name = outcome.get(
+                        "name"
+                    )
+
+                    price = outcome.get(
+                        "price"
+                    )
+
+                    if price:
+
+                        rows.append(
+                            {
+                                "Evento Odds":
+                                    f"{home} vs {away}",
+
+                                "Home":
+                                    home,
+
+                                "Away":
+                                    away,
+
+                                "Mercado":
+                                    market_key,
+
+                                "Selección":
+                                    outcome_name,
+
+                                "Cuota":
+                                    float(price),
+
+                                "Casa":
+                                    bookmaker_name,
+
+                                "Inicio":
+                                    event.get(
+                                        "commence_time"
+                                    ),
+
+                                "Sport Key":
+                                    event.get(
+                                        "sport_key"
+                                    ),
+                            }
+                        )
+
+    return pd.DataFrame(rows)
+
+
+# =========================================================
+# MOTOR QUANT
+# =========================================================
+
+def implied_probability(odds):
+
+    if odds is None:
         return None
 
+    if odds <= 1:
+        return None
 
-def calculate_value_score(edge, ev):
+    return 1 / odds
 
-    """
-    Value Score interno.
 
-    Se mantiene vacío cuando todavía no existen
-    datos suficientes para hacer una evaluación real.
-    """
+def calculate_edge(
+    model_probability,
+    implied_prob
+):
+
+    if (
+        model_probability is None
+        or implied_prob is None
+    ):
+        return None
+
+    return (
+        model_probability
+        - implied_prob
+    )
+
+
+def calculate_ev(
+    model_probability,
+    odds
+):
+
+    if (
+        model_probability is None
+        or odds is None
+    ):
+        return None
+
+    return (
+        model_probability * odds
+    ) - 1
+
+
+def calculate_value_score(
+    edge,
+    ev
+):
 
     if edge is None or ev is None:
         return None
 
-    score = (
-        (edge * 100) * 60
+    return (
+        (edge * 100) * 0.5
         +
-        (ev * 100) * 40
+        (ev * 100) * 0.5
     )
 
-    return round(score, 2)
 
-
-def classify_value(value_score):
-
-    """
-    Clasificación descriptiva del Value Score.
-
-    No constituye una recomendación automática.
-    """
-
-    if value_score is None:
-        return "SIN DATOS"
-
-    if value_score >= 10:
-        return "VALUE ALTO"
-
-    if value_score >= 5:
-        return "VALUE MEDIO"
-
-    if value_score > 0:
-        return "VALUE BAJO"
-
-    return "SIN VALUE"
-
-
-def quant_analysis(
-    model_probability=None,
-    decimal_odds=None
+def classify_value(
+    value_score
 ):
 
-    market_probability = implied_probability(
-        decimal_odds
-    )
+    if value_score is None:
+        return "SIN MODELO"
 
-    edge = calculate_edge(
-        model_probability,
-        market_probability
-    )
+    if value_score >= 10:
+        return "MUY ALTO"
 
-    ev = calculate_ev(
-        model_probability,
-        decimal_odds
-    )
+    if value_score >= 5:
+        return "ALTO"
 
-    value_score = calculate_value_score(
-        edge,
-        ev
-    )
+    if value_score >= 2:
+        return "POSITIVO"
 
-    classification = classify_value(
-        value_score
-    )
+    if value_score >= 0:
+        return "NEUTRO"
 
-    return {
-        "model_probability": model_probability,
-        "market_probability": market_probability,
-        "edge": edge,
-        "ev": ev,
-        "value_score": value_score,
-        "classification": classification,
-    }
+    return "NEGATIVO"
 
 
 # =========================================================
-# FORMATEAR MÉTRICAS
+# APLICAR MOTOR QUANT
 # =========================================================
 
-def percentage(value):
+def apply_quant_engine(df):
 
-    if value is None:
-        return "—"
+    if df.empty:
+        return df
 
-    return f"{value * 100:.2f}%"
+    result = df.copy()
 
+    result["Prob. Implícita"] = (
+        result["Cuota"]
+        .apply(implied_probability)
+    )
 
-def signed_percentage(value):
+    # =====================================================
+    # IMPORTANTE
+    # =====================================================
+    # Todavía no tenemos un modelo predictivo propio.
+    # Por eso NO inventamos una probabilidad.
+    #
+    # La columna queda vacía hasta que conectemos
+    # el modelo estadístico.
+    # =====================================================
 
-    if value is None:
-        return "—"
+    result["Prob. Modelo"] = pd.NA
 
-    return f"{value * 100:+.2f}%"
+    result["Edge"] = pd.NA
 
+    result["EV"] = pd.NA
 
-def number(value):
+    result["Value Score"] = pd.NA
 
-    if value is None:
-        return "—"
+    result["Clasificación"] = "SIN MODELO"
 
-    return f"{value:.2f}"
+    return result
 
 
 # =========================================================
@@ -444,7 +580,7 @@ with st.sidebar:
     st.title("⚙️ Centro de Mando")
 
     st.caption(
-        "Sports Data Hub — FASE 4A"
+        "Sports Data Hub — FASE 4B"
     )
 
     st.divider()
@@ -477,6 +613,39 @@ with st.sidebar:
 
     st.divider()
 
+    st.markdown("### 💰 Cuotas")
+
+    odds_api_key = st.text_input(
+        "The Odds API Key",
+        type="password",
+        help=(
+            "Introduce aquí tu API Key de "
+            "The Odds API."
+        )
+    )
+
+    odds_region = st.selectbox(
+        "Región de casas",
+        [
+            "us",
+            "uk",
+            "eu",
+            "us,uk,eu",
+        ],
+        index=3
+    )
+
+    odds_market = st.selectbox(
+        "Mercado",
+        [
+            "h2h",
+            "spreads",
+            "totals",
+        ]
+    )
+
+    st.divider()
+
     if st.button(
         "🔄 Actualizar datos",
         use_container_width=True
@@ -488,8 +657,8 @@ with st.sidebar:
     st.divider()
 
     st.info(
-        "Fuente deportiva activa: "
-        "TheSportsDB API gratuita."
+        "Datos deportivos: TheSportsDB\n\n"
+        "Cuotas: The Odds API"
     )
 
 
@@ -506,8 +675,8 @@ st.markdown(
         <h3>Sports Data Hub</h3>
 
         <p>
-        Plataforma de análisis deportivo con datos reales
-        y motor cuantitativo en construcción.
+        Plataforma de análisis deportivo con datos reales,
+        cuotas reales y motor cuantitativo.
         </p>
 
     </div>
@@ -520,47 +689,57 @@ st.markdown(
 # ESTADO GENERAL
 # =========================================================
 
-st.markdown(
-    """
-    <div class="real-badge">
+col_a, col_b, col_c = st.columns(3)
+
+with col_a:
+
+    st.markdown(
+        """
+        <div class="real-badge">
         🟢 DATOS DEPORTIVOS REALES
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-st.markdown(
-    """
-    <div class="info-box">
+with col_b:
 
-    <b>Fuente activa:</b> TheSportsDB V1 API
+    if odds_api_key:
 
-    <br><br>
+        st.markdown(
+            """
+            <div class="odds-badge">
+            🟢 CUOTAS CONECTADAS
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    Los eventos mostrados proceden directamente
-    de la fuente deportiva conectada.
+    else:
 
-    <br><br>
+        st.markdown(
+            """
+            <div class="odds-badge">
+            🟡 CUOTAS PENDIENTES
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    <b>Motor Quant:</b> 🟢 ACTIVO
+with col_c:
 
-    <br>
-
-    <b>Cuotas:</b> 🟡 PENDIENTES DE CONEXIÓN
-
-    <br>
-
-    <b>Probabilidades del modelo:</b>
-    🟡 PENDIENTES DE DATOS / MODELO
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    st.markdown(
+        """
+        <div class="real-badge">
+        🟢 MOTOR QUANT ACTIVO
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # =========================================================
-# CONSULTAR API
+# EVENTOS THE SPORTSB DB
 # =========================================================
 
 events, api_status = get_events_day(
@@ -568,10 +747,6 @@ events, api_status = get_events_day(
     sport_filter
 )
 
-
-# =========================================================
-# ESTADO API
-# =========================================================
 
 if api_status == "OK":
 
@@ -582,46 +757,38 @@ if api_status == "OK":
 elif api_status == "NO_EVENTS":
 
     st.warning(
-        "La API respondió correctamente, "
-        "pero no hay eventos disponibles para "
-        "los filtros seleccionados."
-    )
-
-elif api_status.startswith("HTTP"):
-
-    st.error(
-        f"Error HTTP de TheSportsDB: {api_status}"
+        "TheSportsDB respondió correctamente, "
+        "pero no existen eventos para los filtros."
     )
 
 else:
 
     st.error(
-        f"No fue posible obtener los datos: {api_status}"
+        f"Error en TheSportsDB: {api_status}"
     )
 
 
-# =========================================================
-# DATAFRAME
-# =========================================================
-
-df = events_to_dataframe(events)
+df_events = events_to_dataframe(events)
 
 
 # =========================================================
 # KPIs
 # =========================================================
 
-if not df.empty:
+if not df_events.empty:
 
-    total_events = len(df)
+    total_events = len(df_events)
 
-    sports_count = df["Deporte"].nunique()
+    sports_count = (
+        df_events["Deporte"].nunique()
+    )
 
-    leagues_count = df["Liga"].nunique()
+    leagues_count = (
+        df_events["Liga"].nunique()
+    )
 
     countries_count = (
-        df["País"]
-        .replace("None", pd.NA)
+        df_events["País"]
         .dropna()
         .nunique()
     )
@@ -657,14 +824,15 @@ col4.metric(
 )
 
 
-st.divider()
-
-
 # =========================================================
 # FILTROS LOCALES
 # =========================================================
 
-if not df.empty:
+filtered_events = df_events.copy()
+
+if not df_events.empty:
+
+    st.divider()
 
     st.markdown(
         "## 🔎 Filtros del Centro de Mando"
@@ -675,10 +843,10 @@ if not df.empty:
     with col_filter1:
 
         leagues = sorted(
-            [
-                x
-                for x in df["Liga"].dropna().unique()
-            ]
+            df_events["Liga"]
+            .dropna()
+            .unique()
+            .tolist()
         )
 
         selected_league = st.selectbox(
@@ -689,10 +857,10 @@ if not df.empty:
     with col_filter2:
 
         countries = sorted(
-            [
-                x
-                for x in df["País"].dropna().unique()
-            ]
+            df_events["País"]
+            .dropna()
+            .unique()
+            .tolist()
         )
 
         selected_country = st.selectbox(
@@ -700,154 +868,23 @@ if not df.empty:
             ["Todos"] + countries
         )
 
-    filtered_df = df.copy()
-
     if selected_league != "Todas":
 
-        filtered_df = filtered_df[
-            filtered_df["Liga"] == selected_league
+        filtered_events = filtered_events[
+            filtered_events["Liga"]
+            == selected_league
         ]
 
     if selected_country != "Todos":
 
-        filtered_df = filtered_df[
-            filtered_df["País"] == selected_country
+        filtered_events = filtered_events[
+            filtered_events["País"]
+            == selected_country
         ]
 
-else:
-
-    filtered_df = df
-
 
 # =========================================================
-# PANEL MOTOR QUANT
-# =========================================================
-
-st.divider()
-
-st.markdown(
-    "## 🧠 Motor Quant"
-)
-
-st.markdown(
-    """
-    <div class="quant-box">
-
-    <b>Estado:</b> 🟢 Motor Quant operativo
-
-    <br><br>
-
-    El motor ya dispone de las funciones matemáticas
-    necesarias para trabajar con:
-
-    <br><br>
-
-    • Probabilidad del modelo<br>
-    • Probabilidad implícita de mercado<br>
-    • Edge<br>
-    • EV<br>
-    • Value Score<br>
-    • Clasificación de valor
-
-    <br><br>
-
-    <b>Importante:</b> todavía no se generan números
-    artificiales. Las métricas permanecen vacías hasta
-    disponer de probabilidades del modelo y cuotas reales.
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
-# DEMOSTRACIÓN MATEMÁTICA DEL MOTOR
-# =========================================================
-
-with st.expander(
-    "🔬 Ver funcionamiento matemático del Motor Quant"
-):
-
-    st.write(
-        "Esta sección permite comprobar el motor sin "
-        "introducirlo todavía en los partidos reales."
-    )
-
-    demo_probability = st.number_input(
-        "Probabilidad hipotética del modelo (%)",
-        min_value=0.0,
-        max_value=100.0,
-        value=50.0,
-        step=1.0
-    )
-
-    demo_odds = st.number_input(
-        "Cuota decimal hipotética",
-        min_value=1.01,
-        max_value=100.0,
-        value=2.00,
-        step=0.01
-    )
-
-    demo_model_probability = (
-        demo_probability / 100
-    )
-
-    demo = quant_analysis(
-        model_probability=demo_model_probability,
-        decimal_odds=demo_odds
-    )
-
-    d1, d2, d3, d4 = st.columns(4)
-
-    d1.metric(
-        "Prob. modelo",
-        percentage(
-            demo["model_probability"]
-        )
-    )
-
-    d2.metric(
-        "Prob. mercado",
-        percentage(
-            demo["market_probability"]
-        )
-    )
-
-    d3.metric(
-        "Edge",
-        signed_percentage(
-            demo["edge"]
-        )
-    )
-
-    d4.metric(
-        "EV",
-        signed_percentage(
-            demo["ev"]
-        )
-    )
-
-    st.write(
-        f"**Value Score:** "
-        f"{number(demo['value_score'])}"
-    )
-
-    st.write(
-        f"**Clasificación:** "
-        f"{demo['classification']}"
-    )
-
-    st.caption(
-        "Los valores de esta sección son únicamente "
-        "una demostración matemática y no representan "
-        "una recomendación de apuesta."
-    )
-
-
-# =========================================================
-# EVENTOS DEPORTIVOS
+# EVENTOS
 # =========================================================
 
 st.divider()
@@ -857,19 +894,19 @@ st.markdown(
 )
 
 
-if filtered_df.empty:
+if filtered_events.empty:
 
     st.info(
-        "No hay eventos que coincidan con los filtros."
+        "No hay eventos disponibles."
     )
 
 else:
 
     st.caption(
-        f"Mostrando {len(filtered_df)} eventos."
+        f"Mostrando {len(filtered_events)} eventos."
     )
 
-    for _, row in filtered_df.iterrows():
+    for _, row in filtered_events.iterrows():
 
         st.markdown(
             f"""
@@ -911,34 +948,201 @@ else:
 
 
 # =========================================================
-# TABLA DE DATOS
+# CUOTAS REALES
 # =========================================================
 
 st.divider()
 
 st.markdown(
-    "## 📋 Base de datos recibida"
+    "## 💰 Cuotas reales de mercado"
 )
 
-if not filtered_df.empty:
 
-    display_columns = [
-        "ID Evento",
-        "Deporte",
-        "Liga",
-        "Evento",
-        "Fecha",
-        "Hora",
-        "Estadio",
-        "Ciudad",
-        "País",
-        "Estado",
+odds_df = pd.DataFrame()
+
+
+if not odds_api_key:
+
+    st.warning(
+        "🟡 Introduce tu API Key de The Odds API "
+        "en la barra lateral para cargar cuotas reales."
+    )
+
+else:
+
+    if sport_filter == "Todos":
+
+        st.info(
+            "Selecciona un deporte compatible con "
+            "The Odds API para consultar sus cuotas."
+        )
+
+    elif sport_filter not in ODDS_SPORTS:
+
+        st.info(
+            f"The Odds API no está configurada todavía "
+            f"para {sport_filter} en esta versión."
+        )
+
+    else:
+
+        sport_options = ODDS_SPORTS[
+            sport_filter
+        ]
+
+        selected_odds_sport = st.selectbox(
+            "Competición de cuotas",
+            list(sport_options.keys()),
+            format_func=lambda x:
+                sport_options[x]
+        )
+
+        odds_data, odds_status = get_odds(
+            odds_api_key,
+            selected_odds_sport,
+            odds_region,
+            odds_market
+        )
+
+        if odds_status == "OK":
+
+            st.success(
+                "🟢 Cuotas reales recibidas "
+                "desde The Odds API."
+            )
+
+            odds_df = odds_to_dataframe(
+                odds_data
+            )
+
+        elif odds_status == "INVALID_API_KEY":
+
+            st.error(
+                "🔴 La API Key de The Odds API "
+                "no es válida."
+            )
+
+        elif odds_status == "RATE_LIMIT":
+
+            st.warning(
+                "🟡 Se alcanzó el límite de consultas "
+                "de The Odds API."
+            )
+
+        elif odds_status == "NO_ODDS":
+
+            st.info(
+                "No hay cuotas disponibles "
+                "para este deporte/mercado."
+            )
+
+        else:
+
+            st.error(
+                f"Error al obtener cuotas: {odds_status}"
+            )
+
+
+# =========================================================
+# MOTOR QUANT
+# =========================================================
+
+st.divider()
+
+st.markdown(
+    "## 🧠 Motor Quant"
+)
+
+st.markdown(
+    """
+    <div class="info-box">
+
+    <b>Estado: 🟢 OPERATIVO</b>
+
+    <br><br>
+
+    El motor calcula:
+
+    <br>
+
+    • Probabilidad implícita<br>
+    • Probabilidad del modelo<br>
+    • Edge<br>
+    • EV<br>
+    • Value Score<br>
+    • Clasificación de valor
+
+    <br><br>
+
+    <b>Regla de integridad:</b>
+
+    La probabilidad del modelo NO se inventa.
+    Hasta conectar el modelo predictivo, las métricas
+    que dependen de ella permanecen vacías.
+
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# PROCESAMIENTO CUANT
+# =========================================================
+
+if not odds_df.empty:
+
+    quant_df = apply_quant_engine(
+        odds_df
+    )
+
+    st.markdown(
+        "### 📊 Mercado recibido"
+    )
+
+    display_quant = quant_df.copy()
+
+    display_quant["Prob. Implícita"] = (
+        display_quant["Prob. Implícita"]
+        .apply(
+            lambda x:
+            f"{x * 100:.2f}%"
+            if pd.notna(x)
+            else "—"
+        )
+    )
+
+    display_quant["Prob. Modelo"] = "—"
+    display_quant["Edge"] = "—"
+    display_quant["EV"] = "—"
+    display_quant["Value Score"] = "—"
+
+    columns = [
+        "Evento Odds",
+        "Mercado",
+        "Selección",
+        "Cuota",
+        "Prob. Implícita",
+        "Casa",
+        "Prob. Modelo",
+        "Edge",
+        "EV",
+        "Value Score",
+        "Clasificación",
     ]
 
     st.dataframe(
-        filtered_df[display_columns],
+        display_quant[columns],
         use_container_width=True,
         hide_index=True
+    )
+
+else:
+
+    st.info(
+        "Las métricas Quant aparecerán cuando "
+        "existan cuotas reales y una probabilidad "
+        "generada por el modelo."
     )
 
 
@@ -949,55 +1153,58 @@ if not filtered_df.empty:
 st.divider()
 
 st.markdown(
-    "## 🧠 Arquitectura del sistema"
+    "## 🏗️ Arquitectura del sistema"
 )
 
 st.markdown(
     """
     ### CAPA 1 — Datos deportivos 🟢
 
-    TheSportsDB proporciona:
+    **TheSportsDB**
 
-    - Eventos
-    - Equipos
-    - Ligas
-    - Fechas
-    - Horarios
-    - Estadios
-    - Países
-    - IDs de eventos
+    Eventos · Equipos · Ligas · Fechas · Horarios ·
+    Estadios · Países · IDs
 
     ---
 
-    ### CAPA 2 — Motor Quant 🟢
+    ### CAPA 2 — Cuotas 🟢 / 🟡
 
-    El motor ya está preparado para calcular:
+    **The Odds API**
 
-    - Probabilidad implícita
-    - Edge
-    - EV
-    - Value Score
-    - Clasificación de valor
-
-    **Todavía no recibe probabilidades propias ni cuotas
-    reales, por lo que no genera recomendaciones.**
+    Casas de apuestas · Mercados · Selecciones ·
+    Cuotas · Horarios
 
     ---
 
-    ### CAPA 3 — Cuotas 🟡
+    ### CAPA 3 — Motor Quant 🟢
 
-    Pendiente de conectar una fuente real de cuotas.
+    Probabilidad implícita
 
-    Esta capa proporcionará los precios de mercado
-    necesarios para comparar contra el modelo.
+    ↓
+
+    Probabilidad del modelo
+
+    ↓
+
+    Edge
+
+    ↓
+
+    EV
+
+    ↓
+
+    Value Score
+
+    ↓
+
+    Ranking
 
     ---
 
     ### CAPA 4 — Centro de Mando 🟢
 
-    El objetivo final será:
-
-    **Datos → Modelo → Cuotas → Comparación → Edge → EV → Value → Ranking**
+    **Datos → Cuotas → Modelo → Comparación → Edge → EV → Value → Ranking**
     """
 )
 
@@ -1010,5 +1217,5 @@ st.divider()
 
 st.caption(
     "Centro de Mando Quant — Sports Data Hub | "
-    "FASE 4A — Motor Quant"
+    "FASE 4B — Cuotas reales + Motor Quant"
 )
