@@ -1,19 +1,15 @@
 """
-Centro de Mando Quant — Sports Data Hub (FASE 1: Datos Reales, Estabilidad y Cero Inventos)
+Centro de Mando Quant — Sports Data Hub (FASE 1.1: Conexión Estable y Diagnóstico de The Odds API)
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import requests
-datetime_module = __import__('datetime')
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 # =========================================================
-# CONFIGURACIÓN DE SEGURIDAD Y CREDENCIALES
+# CONFIGURACIÓN DE INTERFAZ (DARK MODE QUANT)
 # =========================================================
-API_KEY = st.secrets.get("THE_ODDS_API_KEY", "a60bb46a59d961cb702b89106cb51856")
-
 st.set_page_config(
     page_title="Centro de Mando Quant | Data Hub",
     page_icon="📊",
@@ -21,9 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# =========================================================
-# DISEÑO Y ESTILOS (DARK MODE QUANT)
-# =========================================================
 st.markdown(
     """
     <style>
@@ -47,19 +40,20 @@ st.markdown(
         .error-box {
             background-color: #451a03;
             border-left: 4px solid #f97316;
-            padding: 10px 14px;
+            padding: 12px 16px;
             border-radius: 6px;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             font-size: 13px;
             color: #fed7aa;
         }
-        .combo-box {
-            background: linear-gradient(135deg, #1f2937 11%, #111827 100%);
-            border: 1px solid #f97316;
-            border-radius: 10px;
-            padding: 15px;
-            margin-top: 10px;
+        .success-box {
+            background-color: #064e3b;
+            border-left: 4px solid #10b981;
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 12px;
             font-size: 13px;
+            color: #d1fae5;
         }
     </style>
     """,
@@ -67,256 +61,255 @@ st.markdown(
 )
 
 # =========================================================
-# CONFIGURACIÓN DE DEPORTES Y LIGAS (FÚTBOL Y BÁSQUETBOL)
+# VALIDACIÓN DE CREDENCIALES (REGLA 6 y 8)
 # =========================================================
-SPORTS_CONFIG = {
-    "Fútbol": [
-        "soccer_colombia_primera_a", "soccer_colombia_primera_b",
-        "soccer_argentina_primera_division", "soccer_brazil_campeonato", "soccer_brazil_serie_b",
-        "soccer_mexico_ligamx", "soccer_usa_mls", "soccer_copa_libertadores",
-        "soccer_copa_sudamericana", "soccer_uefa_champions_league", "soccer_epl", "soccer_spain_la_liga"
-    ],
-    "Básquetbol": [
-        "basketball_nba", "basketball_euroleague", "basketball_u19_world_cup"
-    ]
-}
+if "THE_ODDS_API_KEY" not in st.secrets:
+    st.markdown("""
+        <div class="error-box">
+            🔴 <b>THE_ODDS_API_KEY no configurada.</b><br>
+            Debe configurar su clave secreta en el archivo <code>.streamlit/secrets.toml</code> antes de iniciar el sistema.
+        </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+API_KEY = st.secrets["THE_ODDS_API_KEY"]
 
 # =========================================================
-# MOTOR DE EXTRACCIÓN ROBUSTO (CON REGISTRO DE ERRORES)
+# FUNCIONES DE CONEXIÓN CON CACHÉ (REGLAS 3, 5, 9)
 # =========================================================
+@st.cache_data(ttl=3600)
+def get_available_sports(api_key: str) -> tuple[list, dict, str]:
+    """Consulta dinámica de deportes y ligas oficiales desde /v4/sports/"""
+    url = "https://api.the-odds-api.com/v4/sports/"
+    params = {"apiKey": api_key}
+    
+    quota_info = {
+        "used": "N/D",
+        "remaining": "N/D",
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        
+        # Extraer cuotas de uso de los headers de la API
+        quota_info["used"] = response.headers.get("x-requests-used", "N/D")
+        quota_info["remaining"] = response.headers.get("x-requests-remaining", "N/D")
+        quota_info["timestamp"] = datetime.now().strftime("%H:%M:%S")
+
+        if response.status_code == 401:
+            return [], quota_info, "401 OUT_OF_USAGE_CREDITS"
+        elif response.status_code != 200:
+            return [], quota_info, f"HTTP {response.status_code}: {response.text}"
+            
+        data = response.json()
+        return data, quota_info, "OK"
+        
+    except requests.RequestException as e:
+        return [], quota_info, str(e)
+
+
 @st.cache_data(ttl=300)
-def fetch_and_normalize_data(api_key: str, deporte_seleccionado: str) -> tuple[pd.DataFrame, list]:
-    if not api_key or api_key == "TU_CLAVE_AQUI":
-        error_init = {
-            "estado": "ERROR",
-            "http_status": 401,
-            "deporte": "General",
-            "hora": datetime.now().strftime("%H:%M:%S"),
-            "mensaje": "API Key no configurada o inválida."
-        }
-        return pd.DataFrame(), [error_init]
+def get_odds_for_sport(api_key: str, sport_key: str) -> tuple[list, dict, str]:
+    """Consulta de cuotas bajo demanda para una competición específica"""
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "eu,uk,us,au",
+        "markets": "h2h,totals",
+        "oddsFormat": "decimal"
+    }
+    
+    quota_info = {
+        "used": "N/D",
+        "remaining": "N/D",
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    }
 
-    sports_keys = SPORTS_CONFIG.get(deporte_seleccionado, SPORTS_CONFIG["Fútbol"])
-    filas = []
-    error_logs = []
+    try:
+        response = requests.get(url, params=params, timeout=12)
+        
+        quota_info["used"] = response.headers.get("x-requests-used", "N/D")
+        quota_info["remaining"] = response.headers.get("x-requests-remaining", "N/D")
+        quota_info["timestamp"] = datetime.now().strftime("%H:%M:%S")
 
-    for sport_key in sports_keys:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
-        params = {
-            "apiKey": api_key,
-            "regions": "eu,uk,us,au",
-            "markets": "h2h,totals",
-            "oddsFormat": "decimal"
-        }
-        try:
-            respuesta = requests.get(url, params=params, timeout=10)
-            timestamp_actual = datetime.now().strftime("%H:%M:%S")
+        if response.status_code == 401:
+            return [], quota_info, "401 OUT_OF_USAGE_CREDITS"
+        elif response.status_code == 404:
+            return [], quota_info, "404 UNKNOWN_SPORT"
+        elif response.status_code != 200:
+            return [], quota_info, f"HTTP {response.status_code}: {response.text}"
             
-            if respuesta.status_code != 200:
-                error_logs.append({
-                    "estado": "ERROR",
-                    "http_status": respuesta.status_code,
-                    "deporte": sport_key,
-                    "hora": timestamp_actual,
-                    "mensaje": respuesta.text or "Fallo en la respuesta del servidor"
-                })
-                continue
-                
-            datos_json = respuesta.json()
-            
-            for evento in datos_json:
-                fecha_iso = evento.get('commence_time', '')
-                try:
-                    dt_utc = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00"))
-                    dt_colombia = dt_utc - timedelta(hours=5) # Ajuste hora Colombia UTC-5
-                    fecha_solo = dt_colombia.date()
-                    hora_str = dt_colombia.strftime("%H:%M")
-                except:
-                    continue
+        return response.json(), quota_info, "OK"
+        
+    except requests.RequestException as e:
+        return [], quota_info, str(e)
 
-                liga = evento.get('sport_title', 'Deporte Global')
-                equipo_local = evento.get('home_team')
-                equipo_visitante = evento.get('away_team')
-                partido = f"{equipo_local} vs {equipo_visitante}"
-
-                for bookmaker in evento.get('bookmakers', []):
-                    casa_apuestas = bookmaker['title']
-                    cuota_local, cuota_empate, cuota_visita = None, None, None
-
-                    for mercado in bookmaker.get('markets', []):
-                        tipo_mercado = mercado['key']
-                        for outcome in mercado.get('outcomes', []):
-                            seleccion = outcome['name']
-                            cuota = outcome['price']
-                            linea = outcome.get('point', '—')
-                            probabilidad_implicita = round((1 / cuota) * 100, 1)
-
-                            if tipo_mercado == "h2h":
-                                if seleccion == equipo_local: cuota_local = cuota
-                                elif seleccion == equipo_visitante: cuota_visita = cuota
-                                else: cuota_empate = cuota
-
-                            filas.append({
-                                "Fecha_Obj": fecha_solo,
-                                "Hora": hora_str,
-                                "Liga": liga,
-                                "Partido": partido,
-                                "Selección": seleccion,
-                                "Mercado": "Ganador (1X2 / Moneyline)" if tipo_mercado == "h2h" else "Totales (Over/Under)",
-                                "Línea": linea,
-                                "Cuota": cuota,
-                                "Probabilidad Implícita (%)": probabilidad_implicita,
-                                "Casa de Apuestas": casa_apuestas,
-                                "Sport": deporte_seleccionado
-                            })
-
-                    # Cálculo matemático real de Doble Oportunidad si hay 1X2 disponible
-                    if cuota_local and cuota_visita and deporte_seleccionado == "Fútbol":
-                        c_1x = round(1 / ((1/cuota_local) + (1/(cuota_empate or 3.0))), 2)
-                        c_x2 = round(1 / ((1/cuota_visita) + (1/(cuota_empate or 3.0))), 2)
-                        filas.append({
-                            "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
-                            "Selección": f"{equipo_local} o Empate (1X)", "Mercado": "Doble Oportunidad",
-                            "Línea": "—", "Cuota": c_1x, "Probabilidad Implícita (%)": round((1/c_1x)*100, 1),
-                            "Casa de Apuestas": casa_apuestas, "Sport": deporte_seleccionado
-                        })
-                        filas.append({
-                            "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
-                            "Selección": f"{equipo_visitante} o Empate (X2)", "Mercado": "Doble Oportunidad",
-                            "Línea": "—", "Cuota": c_x2, "Probabilidad Implícita (%)": round((1/c_x2)*100, 1),
-                            "Casa de Apuestas": casa_apuestas, "Sport": deporte_seleccionado
-                        })
-
-        except requests.RequestException as e:
-            error_logs.append({
-                "estado": "ERROR DE RED",
-                "http_status": 500,
-                "deporte": sport_key,
-                "hora": datetime.now().strftime("%H:%M:%S"),
-                "mensaje": str(e)
-            })
-
-    df = pd.DataFrame(filas)
-    return df, error_logs
 
 # =========================================================
-# INTERFAZ DE USUARIO — SIDEBAR
+# PANEL LATERAL — CONTROLES
 # =========================================================
 with st.sidebar:
     st.title("⚙️ Panel de Control")
-    st.caption("Centro de Mando Quant — Data Hub")
+    st.caption("The Odds API — Conexión Dinámica")
     st.divider()
 
-    deporte_activo = st.radio("🏟️ Seleccionar Deporte", ["Fútbol", "Básquetbol"])
-    
-    st.divider()
-    fecha_seleccionada = st.date_input(
-        "📅 Día de Análisis",
-        value=date(2026, 7, 27)
-    )
-
-    umbral_seguridad = st.slider("Probabilidad Implícita Máx (%)", 10, 90, 70, 1)
-    
-    st.divider()
-    if st.button("🔄 Refrescar Partidos"):
+    if st.button("🔄 Refrescar Caché / Conexión"):
         st.cache_data.clear()
         st.rerun()
 
-# =========================================================
-# EJECUCIÓN Y CARGA DE DATOS
-# =========================================================
-df_mercados, errores = fetch_and_normalize_data(API_KEY, deporte_activo)
+# Obtener deportes disponibles al cargar la app
+sports_raw, quota_data, status_api = get_available_sports(API_KEY)
 
-# Panel superior de Estado de Conexión
-col_est1, col_est2, col_est3, col_est4 = st.columns(4)
-if not df_mercados.empty or len(errores) == 0:
-    col_est1.markdown("🟢 **API ONLINE**")
-else:
-    col_est1.markdown("🔴 **API CON ADVERTENCIAS**")
+# =========================================================
+# PANEL DE DIAGNÓSTICO SUPERIOR (REGLA 10)
+# =========================================================
+st.title("📊 Centro de Mando Quant — Data Hub (Diagnóstico)")
+st.markdown("##### Verificación de estado, consumo de cuotas y selección dinámica de competiciones")
 
-col_est2.metric("Última Actualización", datetime.now().strftime("%H:%M:%S"))
-col_est3.metric("Eventos Reales", df_mercados["Partido"].nunique() if not df_mercados.empty else 0)
-col_est4.metric("Bookmakers Activos", df_mercados["Casa de Apuestas"].nunique() if not df_mercados.empty else 0)
+col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+
+api_status_label = "🟢 Conectada" if status_api == "OK" else "🔴 Error"
+if status_api == "401 OUT_OF_USAGE_CREDITS":
+    api_status_label = "🔴 Cuota Agotada"
+
+col_d1.metric("ESTADO API", api_status_label)
+col_d2.metric("SPORTS DISPONIBLES", len(sports_raw) if sports_raw else 0)
+col_d3.metric("ÚLTIMA ACTUALIZACIÓN", quota_data["timestamp"])
+col_d4.metric("CUOTA / USAGE", f"Usadas: {quota_data['used']} | Restantes: {quota_data['remaining']}")
 
 st.divider()
 
-# Mostrar errores detallados si ocurren
-if errores:
-    with st.expander("⚠️ Ver Registro de Errores de API (Logs de Conectividad)", expanded=False):
-        for err in errores:
-            st.markdown(f"""
-                <div class="error-box">
-                    <b>Estado:</b> {err['estado']} | <b>HTTP:</b> {err['http_status']} | <b>Deporte:</b> {err['deporte']}<br>
-                    <b>Hora:</b> {err['hora']} | <b>Mensaje:</b> {err['mensaje']}
-                </div>
-            """, unsafe_allow_html=True)
-
-st.title(f"📊 Centro de Mando Quant — {deporte_activo} ({fecha_seleccionada.strftime('%d/%m/%Y')})")
-st.markdown("##### Visualización profesional de partidos, cuotas reales y comparativa de bookmakers sin datos inventados")
-
-if df_mercados.empty:
-    st.warning("No se recibieron datos de partidos en este momento para la fuente seleccionada. Revisa el registro de errores arriba o haz clic en 'Refrescar Partidos'.")
+# Validar error 401 crítico (Regla 6)
+if status_api == "401 OUT_OF_USAGE_CREDITS":
+    st.markdown("""
+        <div class="error-box">
+            🔴 <b>CUOTA DE API AGOTADA (401 OUT_OF_USAGE_CREDITS)</b><br>
+            The Odds API ha rechazado la solicitud porque se alcanzó el límite de uso de su cuenta. No se realizarán más solicitudes automáticas.
+        </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
-# Filtrar por fecha exacta (formato string YYYY-MM-DD) y probabilidad implícita
-fecha_str_busqueda = fecha_seleccionada.strftime("%Y-%m-%d")
-df_filtrado = df_mercados[
-    (df_mercados["Fecha_Obj"].astype(str) == fecha_str_busqueda) & 
-    (df_mercados["Probabilidad Implícita (%)"] <= umbral_seguridad)
-]
+if not sports_raw and status_api != "OK":
+    st.markdown(f"""
+        <div class="error-box">
+            ⚠️ Error al conectar con el endpoint de deportes: <b>{status_api}</b>
+        </div>
+    """, unsafe_allow_html=True)
+    st.stop()
 
-partidos_del_dia = df_filtrado["Partido"].unique()
+# =========================================================
+# SELECTORES DINÁMICOS (REGLA 11)
+# =========================================================
+df_sports = pd.DataFrame(sports_raw)
 
-st.metric(f"Partidos programados para el {fecha_seleccionada.strftime('%d/%m/%Y')}", len(partidos_del_dia))
+# Extraer grupos únicos devueltos por la API (ej: Soccer, Basketball, American Football, etc.)
+grupos_disponibles = df_sports["group"].unique().tolist() if not df_sports.empty else []
+
+col_sel1, col_sel2 = st.columns(2)
+
+with col_sel1:
+    deporte_grupo = st.selectbox("Seleccionar deporte / grupo", grupos_disponibles if grupos_disponibles else ["Sin deportes"])
+
+# Filtrar ligas activas según el grupo seleccionado
+df_filtrado_grupo = df_sports[(df_sports["group"] == deporte_grupo) & (df_sports["active"] == True)] if not df_sports.empty else pd.DataFrame()
+competencias_dict = dict(zip(df_filtrado_grupo["title"], df_filtrado_grupo["key"])) if not df_filtrado_grupo.empty else {}
+
+with col_sel2:
+    competicion_titulo = st.selectbox("Seleccionar competición", list(competencias_dict.keys()) if competencias_dict else ["Sin competiciones activas"])
+
+sport_key_elegido = competencias_dict.get(competicion_titulo)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Botón exclusivo para consultar cuotas bajo demanda (Regla 5 y 11)
+if st.button("🔄 Consultar cuotas"):
+    if not sport_key_elegido:
+        st.warning("Seleccione una competición válida.")
+    else:
+        with st.spinner(f"Consultando cuotas para `{sport_key_elegido}`..."):
+            odds_data, odds_quota, odds_status = get_odds_for_sport(API_KEY, sport_key_elegido)
+            st.session_state["last_odds"] = odds_data
+            st.session_state["last_status"] = odds_status
+            st.session_state["last_quota"] = odds_quota
+            st.session_state["active_comp_name"] = competicion_titulo
+
 st.divider()
 
-if len(partidos_del_dia) == 0:
-    st.info(f"No hay partidos registrados estrictamente para el **{fecha_seleccionada.strftime('%d/%m/%Y')}** con los filtros actuales. Prueba cambiando de fecha en el menú izquierdo.")
-else:
-    # RENDERIZAR RECUADROS INDEPENDIENTES (CARDS) POR CADA PARTIDO REAL
-    for partido in partidos_del_dia:
-        datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
-        liga_info = datos_partido["Liga"].iloc[0]
-        hora_info = datos_partido["Hora"].iloc[0]
+# =========================================================
+# RENDERIZADO DE RESULTADOS (REGLA 7 Y 12)
+# =========================================================
+if "last_odds" in st.session_state:
+    current_status = st.session_state.get("last_status", "OK")
+    current_odds = st.session_state.get("last_odds", [])
+    active_name = st.session_state.get("active_comp_name", "")
+    
+    st.markdown(f"### 📋 Partidos y Cuotas: {active_name}")
+    
+    if current_status == "404 UNKNOWN_SPORT":
+        st.markdown(f"""
+            <div class="error-box">
+                ⚠️ <b>SPORT KEY NO DISPONIBLE (404 UNKNOWN_SPORT)</b><br>
+                La competición seleccionada no tiene eventos activos con cuotas en este momento en el servidor.
+            </div>
+        """, unsafe_allow_html=True)
+    elif current_status == "401 OUT_OF_USAGE_CREDITS":
+        st.markdown("""
+            <div class="error-box">
+                🔴 <b>CUOTA DE API AGOTADA (401 OUT_OF_USAGE_CREDITS)</b><br>
+                Límite de créditos alcanzado durante la consulta de cuotas.
+            </div>
+        """, unsafe_allow_html=True)
+    elif current_status != "OK":
+        st.markdown(f"""
+            <div class="error-box">
+                🔴 Error en la consulta: <b>{current_status}</b>
+            </div>
+        """, unsafe_allow_html=True)
+    elif not current_odds:
+        st.markdown("""
+            <div class="success-box">
+                ℹ️ Conexión exitosa, pero no se encontraron partidos programados con cuotas activas para esta competición en este momento.
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.success(f"Se encontraron {len(current_odds)} eventos reales.")
         
-        with st.container():
-            st.markdown(f"""
-                <div class="match-card">
-                    <h3 style="margin-top:0; color:#f97316;">⚽ {partido}</h3>
-                    <p style="color:#9ca3af; font-size:14px; margin-bottom:15px;">🏆 <b>{liga_info}</b> &nbsp;|&nbsp; ⏰ Hora Colombia: {hora_info}</p>
-            """, unsafe_allow_html=True)
+        for evento in current_odds:
+            partido = f"{evento.get('home_team')} vs {evento.get('away_team')}"
+            liga_title = evento.get('sport_title', '')
+            fecha_iso = evento.get('commence_time', '')
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("##### 🎯 Mercados Reales Disponibles (Comparativa de Bookmakers)")
-                for _, row in datos_partido.iterrows():
-                    st.markdown(f"""
-                        <div class="market-badge">
-                            <b>{row['Mercado']}</b> — <i>{row['Selección']}</i> (Casa: <b>{row['Casa de Apuestas']}</b>)<br>
-                            <span style="color:#9ca3af; font-size:12px;">Cuota Real: <b>{row['Cuota']}</b> | Prob. Implícita: <b>{row['Probabilidad Implícita (%)']}%</b></span>
-                        </div>
-                    """, unsafe_allow_html=True)
+            try:
+                dt_utc = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00"))
+                hora_col = dt_utc - timedelta(hours=5) # Conversión a hora Colombia UTC-5
+                hora_str = hora_col.strftime("%d/%m/%Y %H:%M")
+            except:
+                hora_str = fecha_iso
+
+            with st.container():
+                st.markdown(f"""
+                    <div class="match-card">
+                        <h3 style="margin-top:0; color:#f97316;">⚽ {partido}</h3>
+                        <p style="color:#9ca3af; font-size:14px; margin-bottom:15px;">🏆 <b>{liga_title}</b> &nbsp;|&nbsp; ⏰ Inicio (Colombia): {hora_str}</p>
+                """, unsafe_allow_html=True)
+                
+                for bookmaker in evento.get('bookmakers', []):
+                    casa = bookmaker['title']
+                    st.markdown(f"**Casa de Apuestas: {casa}**")
                     
-            with col2:
-                st.markdown("##### 🔥 Combinada Óptima Basada en Datos Reales")
-                opciones_comb = datos_partido.drop_duplicates(subset=["Mercado"])
-                if len(opciones_comb) >= 2:
-                    p1 = opciones_comb.iloc[0]
-                    p2 = opciones_comb.iloc[1]
-                    cuota_total = round(p1['Cuota'] * p2['Cuota'], 2)
-                    prob_conjunta = round((p1['Probabilidad Implícita (%)'] / 100) * (p2['Probabilidad Implícita (%)'] / 100) * 100, 1)
-                    
-                    st.markdown(f"""
-                        <div class="combo-box">
-                            • <b>Pata 1:</b> {p1['Mercado']} ({p1['Selección']})<br>
-                            • <b>Pata 2:</b> {p2['Mercado']} ({p2['Selección']})<br><br>
-                            <span style="color:#10b981; font-weight:bold;">Cuota Total Real: {cuota_total}</span> &nbsp;|&nbsp; 
-                            <span style="color:#fbbf24; font-weight:bold;">Prob. Implícita Conjunta: {prob_conjunta}%</span>
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.info("No hay suficientes mercados independientes disponibles para este encuentro en la fuente actual.")
-                    
-            st.markdown("</div>", unsafe_allow_html=True)
-            
+                    for mercado in bookmaker.get('markets', []):
+                        m_key = mercado['key']
+                        for outcome in mercado.get('outcomes', []):
+                            sel = outcome['name']
+                            price = outcome['price']
+                            implied_prob = round((1 / price) * 100, 1)
+                            
+                            st.markdown(f"""
+                                <div class="market-badge">
+                                    <b>{m_key.upper()}</b> — <i>{sel}</i><br>
+                                    <span style="color:#9ca3af; font-size:12px;">Cuota Real: <b>{price}</b> | Prob. Implícita: <b>{implied_prob}%</b></span>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                st.markdown("</div>", unsafe_allow_html=True)
