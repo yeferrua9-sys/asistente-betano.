@@ -1,5 +1,5 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 14 (Corrección de Filtro de Fechas + Radar Total)
+Dashboard de Asistente de Inversiones Deportivas - FASE 13 (Base Estable Organizada)
 """
 
 import streamlit as st
@@ -66,7 +66,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Diccionario de jugadores reales para los partidos de hoy
 JUGADORES_DB = {
     "Atletico Goianiense": {"delantero": "Emiliano Rodríguez", "mediocampista": "Shaylon", "extremo": "Luiz Fernando"},
     "Operario PR": {"delantero": "Vinicius Mingotti", "mediocampista": "Neto Paraíba", "extremo": "Maxwell"},
@@ -84,7 +83,7 @@ def obtener_jugadores(equipo):
     return JUGADORES_DB.get(equipo, {"delantero": f"Atacante Estelar ({equipo})", "mediocampista": f"Volante ({equipo})", "extremo": f"Extremo ({equipo})"})
 
 @st.cache_data(ttl=300)
-def obtener_radar_robusto(api_key: str) -> pd.DataFrame:
+def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
@@ -153,7 +152,6 @@ def obtener_radar_robusto(api_key: str) -> pd.DataFrame:
                             "Casa de Apuestas": casa_apuestas, "Categoria": "Principal", "Es_Error_Sistema": False
                         })
                 
-                # Doble Oportunidad
                 if cuota_local and cuota_visita:
                     c_1x = round(1 / ((1/cuota_local) + (1/(cuota_empate or 3.0))), 2)
                     filas.append({
@@ -163,7 +161,6 @@ def obtener_radar_robusto(api_key: str) -> pd.DataFrame:
                         "Casa de Apuestas": casa_apuestas, "Categoria": "Principal", "Es_Error_Sistema": False
                     })
 
-                # Micro-Mercados de Equipo (Córners, Saques de Banda, Faltas, Saques de Meta)
                 filas.append({
                     "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": "Más de 8.5 Córners en el partido", "Mercado": "Tiros de Esquina",
@@ -189,7 +186,6 @@ def obtener_radar_robusto(api_key: str) -> pd.DataFrame:
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo", "Es_Error_Sistema": False
                 })
 
-                # Jugadores Reales y Detección de Errores
                 filas.append({
                     "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": f"{jugadores_loc['delantero']} — Más de 1.5 Remates al Arco", "Mercado": "Remates de Jugador",
@@ -232,7 +228,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-df_mercados = obtener_radar_robusto(API_KEY)
+df_mercados = obtener_radar_con_jugadores(API_KEY)
 
 st.title(f"📊 Centro de Mando Quant — Partidos del {fecha_seleccionada.strftime('%d/%m/%Y')}")
 st.markdown("##### Detección de Errores del Sistema, Jugadores Reales y Micro-Mercados")
@@ -241,7 +237,6 @@ if df_mercados.empty:
     st.warning("Buscando partidos activos...")
     st.stop()
 
-# FILTRADO ROBUSTO USANDO STRINGS DE FECHA
 fecha_str_busqueda = fecha_seleccionada.strftime("%Y-%m-%d")
 df_filtrado = df_mercados[
     (df_mercados["Fecha_Obj"] == fecha_str_busqueda) & 
@@ -254,7 +249,7 @@ st.metric(f"Partidos estrictamente para hoy ({fecha_seleccionada.strftime('%d/%m
 st.divider()
 
 if len(partidos_del_dia) == 0:
-    st.warning(f"No hay partidos registrados estrictamente para el **{fecha_seleccionada.strftime('%d/%m/%Y')}** con este umbral.")
+    st.warning(f"No hay partidos registrados estrictamente para el **{fecha_seleccionada.strftime('%d/%m/%Y')}** con este umbral. Prueba bajando la seguridad.")
 else:
     for partido in partidos_del_dia:
         datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
