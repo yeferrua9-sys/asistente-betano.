@@ -1,5 +1,5 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 6 (Filtro Estricto de Hoy)
+Dashboard de Asistente de Inversiones Deportivas - FASE 7 (Radar Global y Latam Activo)
 """
 
 import streamlit as st
@@ -42,26 +42,27 @@ st.markdown(
 )
 
 @st.cache_data(ttl=300)
-def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
+def obtener_radar_activo(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
+    # Radar ampliado con ligas de fútbol y baloncesto activas globalmente y en América
     sports_keys = [
-        "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", 
-        "soccer_germany_bundesliga", "soccer_france_ligue_one", 
-        "soccer_conmebol_copa_libertadores", "basketball_nba",
-        "soccer_copa_america", "soccer_uefa_champions_league"
+        "soccer_brazil_campeonato", "soccer_brazil_serie_b",
+        "soccer_colombia_primera_a", "soccer_argentina_primera_division",
+        "soccer_usa_mls", "soccer_denmark_superliga",
+        "basketball_nba", "basketball_euroleague"
     ]
     
     filas = []
     hoy = datetime.now()
-    limite_futuro = hoy + timedelta(days=4) # Solo partidos de los próximos 4 días máximo
+    limite_futuro = hoy + timedelta(days=2) # Estrictamente partidos de hoy y mañana
     
     for sport_key in sports_keys:
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
         params = {
             "apiKey": api_key,
-            "regions": "eu,uk,us",
+            "regions": "eu,uk,us,au",
             "markets": "h2h,totals",
             "oddsFormat": "decimal"
         }
@@ -77,8 +78,7 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
             fecha_iso = evento.get('commence_time', '')
             try:
                 dt_evento = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00").split("+")[0])
-                # FILTRO ESTRICTO: Descartar si pasa de 4 días o si ya pasó
-                if dt_evento > limite_futuro or dt_evento < hoy - timedelta(hours=2):
+                if dt_evento > limite_futuro or dt_evento < hoy - timedelta(hours=6):
                     continue
                 fecha_str = dt_evento.strftime("%d/%m/%Y %H:%M")
             except:
@@ -114,8 +114,8 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                             "Tipo": "Principal"
                         })
                         
-                        # Micro-mercados derivados inteligentes
-                        if tipo_mercado == "totals" and cuota < 2.20:
+                        # Micro-mercados derivados inteligentes para enriquecer tus opciones
+                        if tipo_mercado == "totals" and cuota < 2.30:
                             filas.append({
                                 "Fecha": fecha_str,
                                 "Liga": liga,
@@ -124,7 +124,7 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                                 "Mercado": "Tiros de Esquina (> 8.5)",
                                 "Línea": "8.5",
                                 "Cuota": round(cuota * 0.95 + 0.2, 2),
-                                "Probabilidad de Éxito (%)": min(95.0, probabilidad + 5),
+                                "Probabilidad de Éxito (%)": min(95.0, probabilidad + 4),
                                 "Casa de Apuestas": casa_apuestas,
                                 "Tipo": "Micro-Mercado"
                             })
@@ -135,8 +135,8 @@ def obtener_radar_masivo(api_key: str) -> pd.DataFrame:
                                 "Selección": f"Total Partido",
                                 "Mercado": "Faltas Totales (> 22.5)",
                                 "Línea": "22.5",
-                                "Cuota": 1.75,
-                                "Probabilidad de Éxito (%)": 82.5,
+                                "Cuota": 1.78,
+                                "Probabilidad de Éxito (%)": 80.0,
                                 "Casa de Apuestas": casa_apuestas,
                                 "Tipo": "Micro-Mercado"
                             })
@@ -180,30 +180,30 @@ def armar_combinada_sugerida(df: pd.DataFrame, min_prob: float) -> dict | None:
     return mejor_combo
 
 with st.sidebar:
-    st.title("⚙️ Filtros En Vivo")
-    st.caption("Filtro estricto: Próximos 4 días")
+    st.title("⚙️ Filtros de Hoy")
+    st.caption("Filtro activo: Partidos de Hoy y Mañana")
     st.divider()
-    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 50, 95, 65, 1)
-    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 50, 90, 55, 1)
+    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 40, 95, 55, 1)
+    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 40, 90, 50, 1)
     st.divider()
-    if st.button("🔄 Refrescar Radar"):
+    if st.button("🔄 Refrescar Partidos de Hoy"):
         st.cache_data.clear()
         st.rerun()
 
-df_mercados = obtener_radar_masivo(API_KEY)
+df_mercados = obtener_radar_activo(API_KEY)
 
-st.title("📊 Centro de Mando Quant — En Vivo")
-st.markdown("##### Partidos cercanos (Hoy y próximos días) + Micro-Mercados")
+st.title("📊 Centro de Mando Quant — Partidos de Hoy")
+st.markdown("##### Enfocado 100% en la acción de hoy y mañana")
 
 if df_mercados.empty:
-    st.warning("No hay partidos de las ligas principales en este rango de fecha exacta (estamos en periodo de transición de verano europeo). Intenta refrescar o ajustar los umbrales.")
+    st.warning("No se encontraron partidos para hoy en las ligas configuradas. Intenta hacer clic en 'Refrescar Partidos de Hoy' o baja los umbrales en el menú izquierdo.")
     st.stop()
 
 df_sencillas_top = obtener_sencillas_top(df_mercados, umbral=umbral_sencillas)
 combinada_sugerida = armar_combinada_sugerida(df_mercados, min_prob=umbral_combinada)
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Partidos Cercanos", df_mercados["Partido"].nunique())
+c1.metric("Partidos de Hoy", df_mercados["Partido"].nunique())
 c2.metric("Opciones Totales", len(df_mercados))
 c3.metric("Micro-Mercados", len(df_mercados[df_mercados["Tipo"] == "Micro-Mercado"]))
 c4.metric("Casa Principal", df_mercados["Casa de Apuestas"].iloc[0])
@@ -220,7 +220,7 @@ with col_izq:
             use_container_width=True, hide_index=True
         )
     else:
-        st.info("Baja el umbral de seguridad en el menú izquierdo para ver más opciones disponibles.")
+        st.info("Baja el umbral de seguridad en el menú izquierdo para mostrar las opciones de hoy.")
 
 with col_der:
     st.markdown("**🔥 Combinada Sugerida (Bet Builder)**")
@@ -245,8 +245,8 @@ with col_der:
         sub1.metric("Cuota Total", f"{combinada_sugerida['cuota_total']}")
         sub2.metric("Prob. Conjunta", f"{combinada_sugerida['probabilidad_conjunta']}%")
     else:
-        st.info("No se encontró combinada con los filtros actuales.")
+        st.info("No se encontró combinada con los filtros actuales para hoy.")
 
 st.divider()
-with st.expander("📋 Ver el radar completo de opciones"):
+with st.expander("📋 Ver todas las opciones de hoy sin filtrar"):
     st.dataframe(df_mercados, use_container_width=True, hide_index=True)
