@@ -1,17 +1,22 @@
 """
 CENTRO DE MANDO QUANT — SPORTS DATA HUB
-FASE 2 — Motor Quant local + mercados + Value Betting
+FASE 3 — DATOS DEPORTIVOS REALES
+
+Fuente:
+TheSportsDB V1 — API gratuita
 
 IMPORTANTE:
-Esta fase utiliza datos DEMO para construir y probar el motor.
-NO presenta datos demo como datos reales.
-The Odds API queda desconectada temporalmente para no consumir créditos.
+- Los eventos deportivos proceden de TheSportsDB.
+- NO se presentan cuotas inventadas.
+- NO se presentan probabilidades inventadas.
+- El motor Quant todavía NO genera recomendaciones de apuesta.
+- Esta fase construye la capa de datos reales.
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime
+import requests
+from datetime import datetime, date
 
 # =========================================================
 # CONFIGURACIÓN
@@ -53,54 +58,45 @@ st.markdown(
         margin-bottom: 25px;
     }
 
-    .match-card {
+    .event-card {
         background: #181d25;
         border: 1px solid #303846;
         border-radius: 16px;
-        padding: 22px;
-        margin: 18px 0;
+        padding: 20px;
+        margin: 14px 0;
     }
 
-    .market-card {
-        background: #111722;
-        border-left: 4px solid #10b981;
-        border-radius: 8px;
-        padding: 13px;
-        margin: 8px 0;
-    }
-
-    .value-high {
+    .real-badge {
         background: #063c2d;
         border: 1px solid #10b981;
-        border-radius: 10px;
-        padding: 15px;
+        border-radius: 8px;
+        padding: 8px 12px;
+        display: inline-block;
+        margin-bottom: 12px;
     }
 
-    .value-medium {
-        background: #42350a;
-        border: 1px solid #eab308;
+    .info-box {
+        background: #111827;
+        border: 1px solid #374151;
         border-radius: 10px;
         padding: 15px;
+        margin: 15px 0;
     }
 
-    .value-low {
-        background: #351b1b;
-        border: 1px solid #ef4444;
-        border-radius: 10px;
-        padding: 15px;
-    }
-
-    .demo-warning {
+    .warning-box {
         background: #3b2b08;
         border: 1px solid #eab308;
         border-radius: 10px;
         padding: 15px;
-        margin-bottom: 20px;
+        margin: 15px 0;
     }
 
-    .section-title {
-        margin-top: 25px;
-        margin-bottom: 12px;
+    .error-box {
+        background: #3b1111;
+        border: 1px solid #ef4444;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 15px 0;
     }
 
     </style>
@@ -109,281 +105,131 @@ st.markdown(
 )
 
 # =========================================================
-# DATOS DEMO
+# CONFIGURACIÓN THE SPORTS DB
 # =========================================================
 
-FOOTBALL_MATCHES = [
-    {
-        "sport": "Fútbol",
-        "league": "Brasil Série A",
-        "home": "Flamengo",
-        "away": "Internacional",
-        "time": "22:30",
-        "date": "27/07/2026",
-    },
-    {
-        "sport": "Fútbol",
-        "league": "Brasil Série B",
-        "home": "Clube de Regatas Brasil",
-        "away": "Vila Nova",
-        "time": "22:30",
-        "date": "27/07/2026",
-    },
-    {
-        "sport": "Fútbol",
-        "league": "Brasil Série B",
-        "home": "Atlético Goianiense",
-        "away": "Operário PR",
-        "time": "17:30",
-        "date": "27/07/2026",
-    },
-    {
-        "sport": "Fútbol",
-        "league": "Brasil Série B",
-        "home": "Sport Recife",
-        "away": "Cuiabá",
-        "time": "22:30",
-        "date": "27/07/2026",
-    },
-]
+TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
 
-BASKETBALL_MATCHES = [
-    {
-        "sport": "Básquet",
-        "league": "NBA",
-        "home": "Boston Celtics",
-        "away": "New York Knicks",
-        "time": "20:00",
-        "date": "27/07/2026",
-    },
-    {
-        "sport": "Básquet",
-        "league": "NBA",
-        "home": "Los Angeles Lakers",
-        "away": "Golden State Warriors",
-        "time": "22:30",
-        "date": "27/07/2026",
-    },
-]
 
 # =========================================================
-# MERCADOS DEMO
+# FUNCIÓN — OBTENER EVENTOS DEL DÍA
 # =========================================================
 
-FOOTBALL_MARKETS = [
-    {
-        "category": "Resultado",
-        "market": "Ganador (1X2)",
-        "selection": "Flamengo",
-        "odds": 1.95,
-        "model_probability": 0.575,
-    },
-    {
-        "category": "Goles",
-        "market": "Total de goles",
-        "selection": "Más de 2.5",
-        "odds": 1.88,
-        "model_probability": 0.565,
-    },
-    {
-        "category": "Ambos marcan",
-        "market": "Ambos equipos marcan",
-        "selection": "Sí",
-        "odds": 1.82,
-        "model_probability": 0.59,
-    },
-    {
-        "category": "Corners",
-        "market": "Corners totales",
-        "selection": "Más de 8.5",
-        "odds": 1.75,
-        "model_probability": 0.62,
-    },
-    {
-        "category": "Corners",
-        "market": "Corners Flamengo",
-        "selection": "Más de 4.5",
-        "odds": 1.90,
-        "model_probability": 0.613,
-    },
-    {
-        "category": "Tarjetas",
-        "market": "Tarjetas totales",
-        "selection": "Más de 4.5",
-        "odds": 1.85,
-        "model_probability": 0.57,
-    },
-    {
-        "category": "Faltas",
-        "market": "Faltas totales",
-        "selection": "Más de 24.5",
-        "odds": 1.78,
-        "model_probability": 0.60,
-    },
-    {
-        "category": "Saques de banda",
-        "market": "Saques de banda totales",
-        "selection": "Más de 31.5",
-        "odds": 1.82,
-        "model_probability": 0.59,
-    },
-    {
-        "category": "Tiros",
-        "market": "Tiros totales Flamengo",
-        "selection": "Más de 12.5",
-        "odds": 1.90,
-        "model_probability": 0.57,
-    },
-    {
-        "category": "Tiros a puerta",
-        "market": "Tiros a puerta Flamengo",
-        "selection": "Más de 4.5",
-        "odds": 2.00,
-        "model_probability": 0.55,
-    },
-]
+@st.cache_data(ttl=300)
+def get_events_day(selected_date, sport_filter="Todos"):
 
-BASKETBALL_MARKETS = [
-    {
-        "category": "Ganador",
-        "market": "Moneyline",
-        "selection": "Boston Celtics",
-        "odds": 1.80,
-        "model_probability": 0.59,
-    },
-    {
-        "category": "Puntos",
-        "market": "Total puntos",
-        "selection": "Más de 219.5",
-        "odds": 1.90,
-        "model_probability": 0.56,
-    },
-    {
-        "category": "Puntos equipo",
-        "market": "Boston Celtics puntos",
-        "selection": "Más de 111.5",
-        "odds": 1.85,
-        "model_probability": 0.58,
-    },
-    {
-        "category": "Triples",
-        "market": "Triples Boston",
-        "selection": "Más de 12.5",
-        "odds": 1.95,
-        "model_probability": 0.57,
-    },
-    {
-        "category": "Rebotes",
-        "market": "Rebotes totales",
-        "selection": "Más de 83.5",
-        "odds": 1.90,
-        "model_probability": 0.55,
-    },
-    {
-        "category": "Asistencias",
-        "market": "Asistencias totales",
-        "selection": "Más de 44.5",
-        "odds": 1.88,
-        "model_probability": 0.57,
-    },
-]
+    url = f"{TSDB_BASE_URL}/eventsday.php"
 
-# =========================================================
-# FUNCIONES QUANT
-# =========================================================
+    params = {
+        "d": selected_date
+    }
 
-def implied_probability(odds):
-    """
-    Probabilidad implícita de una cuota decimal.
-    """
-    if odds <= 1:
-        return 0
-    return 1 / odds
+    if sport_filter != "Todos":
+        params["s"] = sport_filter
 
+    try:
 
-def calculate_edge(model_probability, implied):
-    """
-    Edge = probabilidad del modelo - probabilidad implícita.
-    """
-    return model_probability - implied
-
-
-def calculate_ev(model_probability, odds):
-    """
-    EV aproximado por unidad apostada.
-
-    EV = p * beneficio - (1-p)
-    """
-    return (model_probability * (odds - 1)) - (1 - model_probability)
-
-
-def value_score(edge, ev):
-    """
-    Score simple de 0 a 100.
-
-    Esto es una primera versión del motor.
-    Más adelante lo sustituiremos por un modelo
-    basado en datos históricos reales.
-    """
-
-    score = (edge * 500) + (ev * 100)
-
-    score = max(0, min(100, score))
-
-    return round(score, 1)
-
-
-def classify_value(score):
-
-    if score >= 70:
-        return "🔥 VALUE ALTO"
-
-    if score >= 50:
-        return "🟡 VALUE MEDIO"
-
-    if score >= 30:
-        return "🟠 VALUE MODERADO"
-
-    return "🔴 SIN VALUE"
-
-
-def analyze_markets(markets):
-
-    results = []
-
-    for item in markets:
-
-        odds = float(item["odds"])
-        model_probability = float(item["model_probability"])
-
-        implied = implied_probability(odds)
-
-        edge = calculate_edge(
-            model_probability,
-            implied
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
         )
 
-        ev = calculate_ev(
-            model_probability,
-            odds
+        if response.status_code != 200:
+            return [], f"HTTP {response.status_code}"
+
+        data = response.json()
+
+        events = data.get("events")
+
+        if not events:
+            return [], "NO_EVENTS"
+
+        return events, "OK"
+
+    except requests.RequestException as error:
+
+        return [], f"ERROR_CONNECTION: {error}"
+
+    except ValueError:
+
+        return [], "ERROR_JSON"
+
+
+# =========================================================
+# FUNCIÓN — FORMATEAR HORA
+# =========================================================
+
+def format_event_time(event):
+
+    timestamp = event.get("strTimestamp")
+
+    if timestamp:
+
+        try:
+
+            dt = datetime.fromisoformat(
+                timestamp.replace("Z", "")
+            )
+
+            return dt.strftime("%H:%M")
+
+        except Exception:
+            pass
+
+    raw_time = event.get("strTime")
+
+    if raw_time:
+
+        return raw_time[:5]
+
+    return "Hora no disponible"
+
+
+# =========================================================
+# FUNCIÓN — CONSTRUIR DATAFRAME
+# =========================================================
+
+def events_to_dataframe(events):
+
+    rows = []
+
+    for event in events:
+
+        home = event.get("strHomeTeam")
+        away = event.get("strAwayTeam")
+
+        if home and away:
+
+            matchup = f"{home} vs {away}"
+
+        elif event.get("strEvent"):
+
+            matchup = event.get("strEvent")
+
+        else:
+
+            matchup = "Evento deportivo"
+
+        rows.append(
+            {
+                "ID Evento": event.get("idEvent"),
+                "Deporte": event.get("strSport"),
+                "Liga": event.get("strLeague"),
+                "Evento": matchup,
+                "Fecha": event.get("dateEvent"),
+                "Hora": format_event_time(event),
+                "Local": home or "N/A",
+                "Visitante": away or "N/A",
+                "Temporada": event.get("strSeason"),
+                "Estadio": event.get("strVenue"),
+                "Ciudad": event.get("strCity"),
+                "País": event.get("strCountry"),
+                "Estado": event.get("strStatus") or "Programado",
+            }
         )
 
-        score = value_score(
-            edge,
-            ev
-        )
-
-        result = dict(item)
-
-        result["implied_probability"] = implied
-        result["edge"] = edge
-        result["ev"] = ev
-        result["value_score"] = score
-        result["signal"] = classify_value(score)
-
-        results.append(result)
-
-    return results
+    return pd.DataFrame(rows)
 
 
 # =========================================================
@@ -395,64 +241,54 @@ with st.sidebar:
     st.title("⚙️ Centro de Mando")
 
     st.caption(
-        "Sports Data Hub — Motor Quant"
+        "Sports Data Hub — FASE 3"
     )
 
     st.divider()
 
-    deporte = st.radio(
-        "🏟️ Seleccionar deporte",
+    st.markdown("### 🗓️ Fecha")
+
+    selected_date = st.date_input(
+        "Día de análisis",
+        value=date.today()
+    )
+
+    st.divider()
+
+    st.markdown("### 🏟️ Deporte")
+
+    sport_filter = st.selectbox(
+        "Filtrar deporte",
         [
-            "⚽ Fútbol",
-            "🏀 Básquet",
+            "Todos",
+            "Soccer",
+            "Basketball",
+            "Tennis",
+            "Baseball",
+            "Ice Hockey",
+            "American Football",
+            "Motorsport",
+            "Athletics",
         ]
     )
 
     st.divider()
 
-    fecha = st.date_input(
-        "📅 Día de análisis",
-        datetime.now()
-    )
+    if st.button(
+        "🔄 Actualizar datos",
+        use_container_width=True
+    ):
 
-    st.divider()
-
-    min_edge = st.slider(
-        "🎯 Edge mínimo (%)",
-        min_value=0,
-        max_value=20,
-        value=3,
-        step=1
-    )
-
-    categorias = st.multiselect(
-        "📊 Categorías",
-        [
-            "Resultado",
-            "Goles",
-            "Ambos marcan",
-            "Corners",
-            "Tarjetas",
-            "Faltas",
-            "Saques de banda",
-            "Tiros",
-            "Tiros a puerta",
-            "Ganador",
-            "Puntos",
-            "Puntos equipo",
-            "Triples",
-            "Rebotes",
-            "Asistencias",
-        ]
-    )
+        st.cache_data.clear()
+        st.rerun()
 
     st.divider()
 
     st.info(
-        "La conexión con The Odds API está "
-        "pausada durante esta fase para evitar "
-        "consumir créditos."
+        "Fuente deportiva activa: "
+        "TheSportsDB API gratuita."
     )
+
 
 # =========================================================
 # HEADER
@@ -462,374 +298,360 @@ st.markdown(
     """
     <div class="quant-header">
 
-    <h1>📊 Centro de Mando Quant</h1>
+        <h1>📊 Centro de Mando Quant</h1>
 
-    <h3>Sports Data Hub</h3>
+        <h3>Sports Data Hub</h3>
 
-    <p>
-    Motor de análisis Value Betting para fútbol y básquet.
-    </p>
+        <p>
+        Plataforma de análisis deportivo con datos reales.
+        </p>
 
     </div>
     """,
     unsafe_allow_html=True
 )
 
+
 # =========================================================
-# AVISO DEMO
+# ESTADO DE CONEXIÓN
 # =========================================================
 
 st.markdown(
     """
-    <div class="demo-warning">
+    <div class="real-badge">
+        🟢 DATOS DEPORTIVOS REALES
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-    ⚠️ <b>MODO DESARROLLO — DATOS DEMO</b>
+st.markdown(
+    """
+    <div class="info-box">
+
+    <b>Fuente activa:</b> TheSportsDB V1 API
 
     <br><br>
 
-    Esta versión está construyendo el motor matemático
-    sin realizar consultas a The Odds API.
+    Esta pantalla obtiene directamente eventos deportivos
+    desde la API y no utiliza partidos inventados.
 
-    Los partidos, cuotas y probabilidades mostrados
-    son datos de demostración y <b>NO representan
-    mercados reales disponibles para apostar.</b>
+    <br><br>
+
+    <b>Cuotas de apuestas:</b> todavía NO conectadas.
 
     </div>
     """,
     unsafe_allow_html=True
 )
 
+
 # =========================================================
-# SELECCIÓN DE DATASET
+# CONSULTAR API
 # =========================================================
 
-if deporte == "⚽ Fútbol":
+events, api_status = get_events_day(
+    selected_date.strftime("%Y-%m-%d"),
+    sport_filter
+)
 
-    matches = FOOTBALL_MATCHES
-    markets_template = FOOTBALL_MARKETS
+
+# =========================================================
+# ESTADO API
+# =========================================================
+
+if api_status == "OK":
+
+    st.success(
+        "🟢 Conexión correcta con TheSportsDB."
+    )
+
+elif api_status == "NO_EVENTS":
+
+    st.warning(
+        "La API respondió correctamente, "
+        "pero no hay eventos disponibles para "
+        "los filtros seleccionados."
+    )
+
+elif api_status.startswith("HTTP"):
+
+    st.error(
+        f"Error HTTP de TheSportsDB: {api_status}"
+    )
 
 else:
 
-    matches = BASKETBALL_MATCHES
-    markets_template = BASKETBALL_MARKETS
-
-
-# =========================================================
-# ANÁLISIS
-# =========================================================
-
-all_results = []
-
-for match in matches:
-
-    analyzed = analyze_markets(
-        markets_template
+    st.error(
+        f"No fue posible obtener los datos: {api_status}"
     )
 
-    for result in analyzed:
-
-        result["home"] = match["home"]
-        result["away"] = match["away"]
-        result["league"] = match["league"]
-        result["time"] = match["time"]
-        result["date"] = match["date"]
-
-        all_results.append(result)
-
-
-df = pd.DataFrame(all_results)
 
 # =========================================================
-# FILTRO EDGE
+# DATAFRAME
 # =========================================================
 
-df = df[
-    df["edge"] * 100 >= min_edge
-]
+df = events_to_dataframe(events)
 
-if categorias:
-
-    df = df[
-        df["category"].isin(categorias)
-    ]
 
 # =========================================================
 # KPIs
 # =========================================================
 
-total_opportunities = len(df)
+if not df.empty:
 
-if total_opportunities > 0:
+    total_events = len(df)
 
-    avg_edge = df["edge"].mean() * 100
-    avg_ev = df["ev"].mean() * 100
-    max_score = df["value_score"].max()
+    sports_count = df["Deporte"].nunique()
+
+    leagues_count = df["Liga"].nunique()
+
+    countries_count = df["País"].replace(
+        "None",
+        pd.NA
+    ).dropna().nunique()
 
 else:
 
-    avg_edge = 0
-    avg_ev = 0
-    max_score = 0
+    total_events = 0
+    sports_count = 0
+    leagues_count = 0
+    countries_count = 0
 
 
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric(
-    "OPORTUNIDADES",
-    total_opportunities
+    "EVENTOS",
+    total_events
 )
 
 col2.metric(
-    "EDGE PROMEDIO",
-    f"{avg_edge:.2f}%"
+    "DEPORTES",
+    sports_count
 )
 
 col3.metric(
-    "EV PROMEDIO",
-    f"{avg_ev:.2f}%"
+    "LIGAS",
+    leagues_count
 )
 
 col4.metric(
-    "MEJOR VALUE SCORE",
-    f"{max_score:.1f}"
+    "PAÍSES",
+    countries_count
 )
+
 
 st.divider()
 
+
 # =========================================================
-# RANKING
+# FILTROS LOCALES
 # =========================================================
+
+if not df.empty:
+
+    st.markdown(
+        "## 🔎 Filtros del Centro de Mando"
+    )
+
+    col_filter1, col_filter2 = st.columns(2)
+
+    with col_filter1:
+
+        leagues = sorted(
+            [
+                x
+                for x in df["Liga"].dropna().unique()
+            ]
+        )
+
+        selected_league = st.selectbox(
+            "🏆 Liga",
+            ["Todas"] + leagues
+        )
+
+    with col_filter2:
+
+        countries = sorted(
+            [
+                x
+                for x in df["País"].dropna().unique()
+            ]
+        )
+
+        selected_country = st.selectbox(
+            "🌎 País",
+            ["Todos"] + countries
+        )
+
+    filtered_df = df.copy()
+
+    if selected_league != "Todas":
+
+        filtered_df = filtered_df[
+            filtered_df["Liga"] == selected_league
+        ]
+
+    if selected_country != "Todos":
+
+        filtered_df = filtered_df[
+            filtered_df["País"] == selected_country
+        ]
+
+else:
+
+    filtered_df = df
+
+
+# =========================================================
+# PARTIDOS / EVENTOS
+# =========================================================
+
+st.divider()
 
 st.markdown(
-    "## 🔥 Ranking de oportunidades"
+    "## 🏟️ Eventos deportivos reales"
 )
 
-if df.empty:
 
-    st.warning(
-        "No hay oportunidades que cumplan "
-        "el filtro seleccionado."
+if filtered_df.empty:
+
+    st.info(
+        "No hay eventos que coincidan con los filtros."
     )
 
 else:
 
-    df_rank = df.sort_values(
-        "value_score",
-        ascending=False
+    st.caption(
+        f"Mostrando {len(filtered_df)} eventos."
     )
 
-    for index, row in df_rank.iterrows():
-
-        if row["value_score"] >= 70:
-
-            css_class = "value-high"
-
-        elif row["value_score"] >= 50:
-
-            css_class = "value-medium"
-
-        else:
-
-            css_class = "value-low"
+    for _, row in filtered_df.iterrows():
 
         st.markdown(
             f"""
-            <div class="{css_class}">
+            <div class="event-card">
 
-            <h3>
-            {row["signal"]}
-            </h3>
+                <h3>
+                    🏟️ {row["Evento"]}
+                </h3>
 
-            <b>
-            {row["home"]} vs {row["away"]}
-            </b>
+                <p>
+                    🏆 <b>{row["Liga"]}</b>
+                    &nbsp; | &nbsp;
+                    🏅 {row["Deporte"]}
+                </p>
 
-            <br>
+                <p>
+                    📅 {row["Fecha"]}
+                    &nbsp; | &nbsp;
+                    ⏰ {row["Hora"]}
+                </p>
 
-            🏆 {row["league"]}
-            &nbsp; | &nbsp;
-            ⏰ {row["time"]}
+                <p>
+                    📍 {row["Estadio"] or "Estadio no disponible"}
+                    &nbsp; | &nbsp;
+                    {row["Ciudad"] or ""}
+                    &nbsp; | &nbsp;
+                    {row["País"] or ""}
+                </p>
 
-            <hr>
-
-            <b>{row["category"]}</b>
-
-            <br>
-
-            🎯 {row["market"]}
-            <br>
-
-            Selección:
-            <b>{row["selection"]}</b>
-
-            <br><br>
-
-            Cuota:
-            <b>{row["odds"]:.2f}</b>
-
-            &nbsp; | &nbsp;
-
-            Probabilidad implícita:
-            <b>{row["implied_probability"] * 100:.2f}%</b>
-
-            &nbsp; | &nbsp;
-
-            Modelo:
-            <b>{row["model_probability"] * 100:.2f}%</b>
-
-            <br><br>
-
-            <b>
-            EDGE:
-            {row["edge"] * 100:+.2f}%
-            </b>
-
-            &nbsp; | &nbsp;
-
-            <b>
-            EV:
-            {row["ev"] * 100:+.2f}%
-            </b>
-
-            &nbsp; | &nbsp;
-
-            <b>
-            VALUE SCORE:
-            {row["value_score"]:.1f}/100
-            </b>
+                <p>
+                    🆔 ID evento:
+                    <b>{row["ID Evento"]}</b>
+                </p>
 
             </div>
             """,
             unsafe_allow_html=True
         )
 
+
 # =========================================================
-# TABLA GENERAL
+# TABLA DE DATOS
 # =========================================================
 
 st.divider()
 
 st.markdown(
-    "## 📋 Tabla Quant"
+    "## 📋 Base de datos recibida"
 )
 
-if not df.empty:
+if not filtered_df.empty:
 
-    table = df[
-        [
-            "home",
-            "away",
-            "category",
-            "market",
-            "selection",
-            "odds",
-            "implied_probability",
-            "model_probability",
-            "edge",
-            "ev",
-            "value_score",
-            "signal",
-        ]
-    ].copy()
-
-    table["implied_probability"] *= 100
-    table["model_probability"] *= 100
-    table["edge"] *= 100
-    table["ev"] *= 100
-
-    table = table.rename(
-        columns={
-            "home": "Local",
-            "away": "Visitante",
-            "category": "Categoría",
-            "market": "Mercado",
-            "selection": "Selección",
-            "odds": "Cuota",
-            "implied_probability": "Prob. Implícita %",
-            "model_probability": "Prob. Modelo %",
-            "edge": "Edge %",
-            "ev": "EV %",
-            "value_score": "Value Score",
-            "signal": "Señal",
-        }
-    )
+    display_columns = [
+        "ID Evento",
+        "Deporte",
+        "Liga",
+        "Evento",
+        "Fecha",
+        "Hora",
+        "Estadio",
+        "Ciudad",
+        "País",
+        "Estado",
+    ]
 
     st.dataframe(
-        table,
+        filtered_df[display_columns],
         use_container_width=True,
-        hide_index=True,
+        hide_index=True
     )
 
+
 # =========================================================
-# EXPLICACIÓN DEL MODELO
+# INFORMACIÓN TÉCNICA
 # =========================================================
 
 st.divider()
 
 st.markdown(
-    "## 🧠 ¿Cómo funciona el motor Quant?"
+    "## 🧠 Arquitectura actual"
 )
 
 st.markdown(
     """
-    ### 1️⃣ Probabilidad implícita
+    ### CAPA 1 — Datos deportivos
 
-    Para una cuota decimal:
+    TheSportsDB proporciona:
 
-    **Probabilidad implícita = 1 / cuota**
+    - Eventos
+    - Equipos
+    - Ligas
+    - Fechas
+    - Horarios
+    - Estadios
+    - Países
+    - IDs de eventos
 
-    Ejemplo:
+    ### CAPA 2 — Motor Quant
 
-    `Cuota 2.00 → 50%`
+    🚧 En construcción.
 
-    ---
+    Esta capa será responsable de calcular posteriormente:
 
-    ### 2️⃣ Probabilidad del modelo
+    - Probabilidades
+    - Edge
+    - EV
+    - Value Score
+    - Ranking de oportunidades
 
-    El motor estima una probabilidad independiente.
+    ### CAPA 3 — Cuotas
 
-    En esta fase es DEMO.
+    🚧 Pendiente.
 
-    Posteriormente será calculada utilizando datos
-    deportivos históricos y actuales.
+    Aquí incorporaremos una fuente de cuotas de apuestas
+    para comparar mercados y casas de apuestas.
 
-    ---
+    ### CAPA 4 — Centro de Mando
 
-    ### 3️⃣ Edge
+    Finalmente tendremos:
 
-    `Edge = Probabilidad del modelo − Probabilidad implícita`
-
-    Ejemplo:
-
-    `Modelo = 58%`
-
-    `Mercado = 50%`
-
-    `Edge = +8%`
-
-    ---
-
-    ### 4️⃣ EV
-
-    El valor esperado estima el rendimiento matemático
-    esperado de una unidad apostada:
-
-    `EV = p × (cuota − 1) − (1 − p)`
-
-    ---
-
-    ### 5️⃣ Value Score
-
-    El Value Score combina Edge y EV para ordenar
-    las oportunidades.
-
-    **Este score es provisional.**
-
-    La siguiente fase utilizará datos históricos
-    para construir un modelo estadístico real.
-
+    **Datos → Modelo → Cuotas → Comparación → Value → Ranking**
     """
 )
+
 
 # =========================================================
 # FOOTER
@@ -839,5 +661,5 @@ st.divider()
 
 st.caption(
     "Centro de Mando Quant — Sports Data Hub | "
-    "FASE 2 — Motor Quant en desarrollo"
+    "FASE 3 — Datos deportivos reales"
 )
