@@ -52,19 +52,18 @@ st.markdown(
 # =========================================================
 # EXTRACCIÓN DE DATOS REALES (THE ODDS API)
 # =========================================================
-@st.cache_data(ttl=300) # Se actualiza cada 5 minutos para no gastar tus créditos
+@st.cache_data(ttl=300)
 def obtener_datos_reales(deporte: str, api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
-    # Mapeo de deportes para la API
-    sport_key = "soccer_upcoming" if deporte == "Fútbol" else "basketball_upcoming"
+    sport_key = "soccer_spain_la_liga" if deporte == "Fútbol" else "basketball_nba"
     
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
     params = {
         "apiKey": api_key,
-        "regions": "eu,uk,us", # Regiones amplias para asegurar captura de cuotas
-        "markets": "h2h,totals", 
+        "regions": "eu,uk",
+        "markets": "h2h,totals",
         "oddsFormat": "decimal"
     }
     
@@ -83,7 +82,6 @@ def obtener_datos_reales(deporte: str, api_key: str) -> pd.DataFrame:
         equipo_visitante = evento.get('away_team')
         partido = f"{equipo_local} vs {equipo_visitante}"
         
-        # Formato de fecha
         fecha_iso = evento.get('commence_time', '')
         try:
             fecha = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
@@ -101,7 +99,6 @@ def obtener_datos_reales(deporte: str, api_key: str) -> pd.DataFrame:
                     cuota = outcome['price']
                     linea = outcome.get('point', '—')
                     
-                    # Cálculo matemático: Probabilidad Implícita basada en la cuota real
                     probabilidad_implicita = round((1 / cuota) * 100, 1)
                     
                     filas.append({
@@ -119,10 +116,9 @@ def obtener_datos_reales(deporte: str, api_key: str) -> pd.DataFrame:
     df = pd.DataFrame(filas)
     
     if not df.empty:
-        # 🎯 FILTRO ESTRATÉGICO: Priorizar Betano
         df_betano = df[df["Casa de Apuestas"].str.contains("Betano", case=False, na=False)]
         if not df_betano.empty:
-            df = df_betano # Si Betano tiene cuotas, desechamos el resto
+            df = df_betano
             
     return df
 
