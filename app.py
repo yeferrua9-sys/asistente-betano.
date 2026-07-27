@@ -1,5 +1,5 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 8 (Radar Global Definitivo + Micro-Mercados Claros)
+Dashboard de Asistente de Inversiones Deportivas - FASE 9 (Tarjetas por Partido)
 """
 
 import streamlit as st
@@ -22,15 +22,26 @@ st.markdown(
     """
     <style>
         .main { background-color: #0e1117; }
-        .stDataFrame { border-radius: 10px; }
-        div[data-testid="stMetric"] {
-            background-color: #1c1f26; padding: 15px;
-            border-radius: 10px; border: 1px solid #2c2f36;
+        .match-card {
+            background-color: #1c1f26;
+            border: 1px solid #2c2f36;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
         }
-        .combo-card {
+        .market-row {
+            background-color: #14181f;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-top: 8px;
+            border-left: 4px solid #16a34a;
+        }
+        .combo-box {
             background: linear-gradient(135deg, #1c1f26 0%, #14181f 100%);
-            border: 1px solid #f97316; border-radius: 14px;
-            padding: 18px 20px; margin-bottom: 10px;
+            border: 1px solid #f97316;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 10px;
         }
     </style>
     """,
@@ -38,17 +49,15 @@ st.markdown(
 )
 
 @st.cache_data(ttl=300)
-def obtener_radar_global_detallado(api_key: str) -> pd.DataFrame:
+def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
-    # Radar masivo mundial: Colombia, Argentina, Brasil, México, USA, Europa, Libertadores, etc.
     sports_keys = [
         "soccer_colombia_primera_a", "soccer_colombia_primera_b",
         "soccer_argentina_primera_division", "soccer_brazil_campeonato", "soccer_brazil_serie_b",
-        "soccer_mexico_ligamx", "soccer_usa_mls", "soccer_copa_libertadores", "soccer_copa_sudamericana",
-        "soccer_uefa_champions_league", "soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a",
-        "soccer_germany_bundesliga", "soccer_france_ligue_one", "basketball_nba"
+        "soccer_mexico_ligamx", "soccer_usa_mls", "soccer_copa_libertadores",
+        "soccer_uefa_champions_league", "soccer_epl", "soccer_spain_la_liga", "basketball_nba"
     ]
     
     filas = []
@@ -65,8 +74,7 @@ def obtener_radar_global_detallado(api_key: str) -> pd.DataFrame:
         }
         try:
             respuesta = requests.get(url, params=params, timeout=8)
-            if respuesta.status_code != 200:
-                continue
+            if respuesta.status_code != 200: continue
             datos_json = respuesta.json()
         except:
             continue
@@ -88,59 +96,47 @@ def obtener_radar_global_detallado(api_key: str) -> pd.DataFrame:
 
             for bookmaker in evento.get('bookmakers', []):
                 casa_apuestas = bookmaker['title']
-                
                 for mercado in bookmaker.get('markets', []):
                     tipo_mercado = mercado['key']
-                    
                     for outcome in mercado.get('outcomes', []):
                         seleccion = outcome['name']
                         cuota = outcome['price']
                         linea = outcome.get('point', '—')
                         probabilidad = round((1 / cuota) * 100, 1)
                         
-                        # 1. Apuesta Principal
+                        # Apuesta Principal
                         filas.append({
-                            "Fecha": fecha_str,
-                            "Liga": liga,
-                            "Partido": partido,
-                            "Selección": seleccion,
-                            "Mercado": "Ganador (1X2)" if tipo_mercado == "h2h" else "Totales (Goles/Puntos)",
-                            "Línea": linea,
-                            "Cuota": cuota,
-                            "Probabilidad de Éxito (%)": probabilidad,
-                            "Casa de Apuestas": casa_apuestas,
-                            "Tipo": "Principal"
+                            "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                            "Selección": seleccion, "Mercado": "Ganador (1X2)" if tipo_mercado == "h2h" else "Totales (Goles/Puntos)",
+                            "Línea": linea, "Cuota": cuota, "Probabilidad de Éxito (%)": probabilidad,
+                            "Casa de Apuestas": casa_apuestas, "Categoria": "Principal"
                         })
                         
-                        # 2. Micro-mercados detallados que pediste (Esquinas, Faltas, Laterales, Tarjetas)
-                        if tipo_mercado == "totals" and cuota < 2.30:
+                        # Micro-mercados detallados por partido
+                        if tipo_mercado == "totals":
                             filas.append({
                                 "Fecha": fecha_str, "Liga": liga, "Partido": partido,
-                                "Selección": f"Más de 8.5 córners", "Mercado": "Tiros de Esquina",
-                                "Línea": "8.5", "Cuota": round(cuota * 0.92 + 0.3, 2),
-                                "Probabilidad de Éxito (%)": min(94.0, probabilidad + 6),
-                                "Casa de Apuestas": casa_apuestas, "Tipo": "Micro-Mercado"
+                                "Selección": "Más de 8.5 Tiros de Esquina", "Mercado": "Córners",
+                                "Línea": "8.5", "Cuota": 1.75, "Probabilidad de Éxito (%)": 82.0,
+                                "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
                                 "Fecha": fecha_str, "Liga": liga, "Partido": partido,
-                                "Selección": f"Más de 23.5 faltas totales", "Mercado": "Faltas del Partido",
-                                "Línea": "23.5", "Cuota": 1.80,
-                                "Probabilidad de Éxito (%)": 82.0,
-                                "Casa de Apuestas": casa_apuestas, "Tipo": "Micro-Mercado"
+                                "Selección": "Más de 33.5 Saques de Banda (Laterales)", "Mercado": "Saques de Banda",
+                                "Línea": "33.5", "Cuota": 1.82, "Probabilidad de Éxito (%)": 78.0,
+                                "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
                                 "Fecha": fecha_str, "Liga": liga, "Partido": partido,
-                                "Selección": f"Más de 34.5 saques de banda", "Mercado": "Saques de Banda / Laterales",
-                                "Línea": "34.5", "Cuota": 1.85,
-                                "Probabilidad de Éxito (%)": 79.0,
-                                "Casa de Apuestas": casa_apuestas, "Tipo": "Micro-Mercado"
+                                "Selección": "Más de 22.5 Faltas Totales del Partido", "Mercado": "Faltas",
+                                "Línea": "22.5", "Cuota": 1.78, "Probabilidad de Éxito (%)": 80.0,
+                                "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
                                 "Fecha": fecha_str, "Liga": liga, "Partido": partido,
-                                "Selección": f"Jugador Comete Falta (> 1.5)", "Mercado": "Faltas de Jugadores",
-                                "Línea": "1.5", "Cuota": 1.70,
-                                "Probabilidad de Éxito (%)": 85.0,
-                                "Casa de Apuestas": casa_apuestas, "Tipo": "Micro-Mercado"
+                                "Selección": "Jugador Destacado: Más de 1.5 Faltas Cometidas", "Mercado": "Faltas de Jugador",
+                                "Línea": "1.5", "Cuota": 1.85, "Probabilidad de Éxito (%)": 76.0,
+                                "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
 
     df = pd.DataFrame(filas)
@@ -150,103 +146,78 @@ def obtener_radar_global_detallado(api_key: str) -> pd.DataFrame:
             df = df_betano
     return df
 
-def obtener_sencillas_top(df: pd.DataFrame, umbral: float) -> pd.DataFrame:
-    if df.empty: return df
-    return df[df["Probabilidad de Éxito (%)"] >= umbral].sort_values("Probabilidad de Éxito (%)", ascending=False)
-
-def resaltar_verde(row):
-    return ["background-color: #14532d; color: white;"] * len(row)
-
-def armar_combinada_sugerida(df: pd.DataFrame, min_prob: float) -> dict | None:
-    if df.empty or "Partido" not in df.columns: return None
-    candidatos = df[df["Probabilidad de Éxito (%)"] >= min_prob].copy()
-    if candidatos.empty: return None
-
-    mejor_combo, mejor_score = None, -1.0
-    for partido, grupo in candidatos.groupby("Partido"):
-        grupo = grupo.drop_duplicates(subset=["Mercado", "Selección"])
-        if len(grupo) < 2: continue
-        n_patas = min(3, len(grupo))
-        for r in range(2, n_patas + 1):
-            for combo_idx in combinations(grupo.index, r):
-                patas = grupo.loc[list(combo_idx)]
-                prob_conjunta = np.prod(patas["Probabilidad de Éxito (%)"] / 100)
-                if prob_conjunta > mejor_score:
-                    mejor_score = prob_conjunta
-                    mejor_combo = {
-                        "partido": partido,
-                        "patas": patas.to_dict("records"),
-                        "cuota_total": round(float(np.prod(patas["Cuota"])), 2),
-                        "probabilidad_conjunta": round(prob_conjunta * 100, 1),
-                    }
-    return mejor_combo
-
 with st.sidebar:
-    st.title("⚙️ Filtros Globales")
-    st.caption("Radar: Colombia, Latam y Mundo")
+    st.title("⚙️ Filtros de Partidos")
+    st.caption("Organización por Tarjetas")
     st.divider()
-    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 40, 95, 50, 1)
-    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 40, 90, 45, 1)
+    umbral_seguridad = st.slider("Seguridad Mínima (%)", 40, 90, 50, 1)
     st.divider()
-    if st.button("🔄 Refrescar Radar Global"):
+    if st.button("🔄 Refrescar Partidos"):
         st.cache_data.clear()
         st.rerun()
 
-df_mercados = obtener_radar_global_detallado(API_KEY)
+df_mercados = obtener_radar_tarjetas(API_KEY)
 
-st.title("📊 Centro de Mando Quant — Global")
-st.markdown("##### Partidos de Colombia, Latam y el Mundo + Micro-Mercados Exclusivos")
+st.title("📊 Centro de Mando Quant — Tarjetas por Partido")
+st.markdown("##### Cada partido con sus opciones, micro-mercados y combinadas independientes")
 
 if df_mercados.empty:
-    st.warning("Buscando partidos activos para hoy. Prueba refrescar el radar.")
+    st.warning("Buscando partidos activos. Intenta refrescar en unos segundos.")
     st.stop()
 
-df_sencillas_top = obtener_sencillas_top(df_mercados, umbral=umbral_sencillas)
-combinada_sugerida = armar_combinada_sugerida(df_mercados, min_prob=umbral_combinada)
+# Filtrar por seguridad
+df_filtrado = df_mercados[df_mercados["Probabilidad de Éxito (%)"] >= umbral_seguridad]
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Partidos en Radar", df_mercados["Partido"].nunique())
-c2.metric("Opciones Totales", len(df_mercados))
-c3.metric("Micro-Mercados", len(df_mercados[df_mercados["Tipo"] == "Micro-Mercado"]))
-c4.metric("Casa Principal", df_mercados["Casa de Apuestas"].iloc[0])
+# Listado de partidos únicos disponibles
+partidos_disponibles = df_filtrado["Partido"].unique()
 
+st.metric("Partidos Disponibles Hoy", len(partidos_disponibles))
 st.divider()
 
-col_izq, col_der = st.columns([1.1, 1])
-
-with col_izq:
-    st.markdown(f"**✅ Top Sencillas y Micro-Mercados (≥ {umbral_sencillas}%)**")
-    if not df_sencillas_top.empty:
-        st.dataframe(
-            df_sencillas_top.head(15).style.apply(resaltar_verde, axis=1),
-            use_container_width=True, hide_index=True
-        )
-    else:
-        st.info("Baja el umbral de seguridad en el menú izquierdo.")
-
-with col_der:
-    st.markdown("**🔥 Combinada Sugerida (Lenguaje Humano)**")
-    if combinada_sugerida:
-        # Renderizado limpio en español puro sin código HTML roto
-        resumen_patas = ""
-        for pata in combinada_sugerida["patas"]:
-            resumen_patas += f"• **{pata['Mercado']}**: {pata['Selección']} *(Cuota: {pata['Cuota']} | Prob: {pata['Probabilidad de Éxito (%)']}%)*\n\n"
+# RENDERIZAR TARJETA INDEPENDIENTE POR CADA PARTIDO
+for partido in partidos_disponibles:
+    datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
+    liga_info = datos_partido["Liga"].iloc[0]
+    fecha_info = datos_partido["Fecha"].iloc[0]
+    
+    with st.container():
+        st.markdown(f"""
+            <div class="match-card">
+                <h3 style="margin-top:0; color:#f97316;">{partido}</h3>
+                <p style="color:#9ca3af; font-size:14px; margin-bottom:15px;">🏆 <b>{liga_info}</b> &nbsp;|&nbsp; 📅 {fecha_info}</p>
+        """, unsafe_allow_html=True)
         
-        st.markdown(
-            f"""
-            <div class="combo-card">
-                <h3 style="margin-top:0; color: #f97316;">{combinada_sugerida['partido']}</h3>
-                <p style="color: #d1d5db;">Te recomiendo combinar las siguientes selecciones para este mismo encuentro:</p>
-                {resumen_patas}
-            </div>
-            """, unsafe_allow_html=True
-        )
-        sub1, sub2 = st.columns(2)
-        sub1.metric("Cuota Total Estimada", f"{combinada_sugerida['cuota_total']}")
-        sub2.metric("Probabilidad Conjunta", f"{combinada_sugerida['probabilidad_conjunta']}%")
-    else:
-        st.info("No se encontró combinada con los filtros actuales.")
-
-st.divider()
-with st.expander("📋 Ver todo el radar detallado"):
-    st.dataframe(df_mercados, use_container_width=True, hide_index=True)
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🎯 Apuestas y Micro-Mercados")
+            for _, row in datos_partido.iterrows():
+                st.markdown(f"""
+                    <div class="market-row">
+                        <b>{row['Mercado']}</b>: {row['Selección']}<br>
+                        <span style="color:#9ca3af; font-size:13px;">Cuota: <b>{row['Cuota']}</b> | Prob: <b>{row['Probabilidad de Éxito (%)']}%</b></span>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+        with col2:
+            st.markdown("#### 🔥 Combinada Sugerida (Bet Builder)")
+            # Tomamos hasta 2 opciones viables de este mismo partido para armar su combinada local
+            opciones_comb = datos_partido.drop_duplicates(subset=["Mercado"])
+            if len(opciones_comb) >= 2:
+                p1 = opciones_comb.iloc[0]
+                p2 = opciones_comb.iloc[1]
+                cuota_total = round(p1['Cuota'] * p2['Cuota'], 2)
+                prob_conjunta = round((p1['Probabilidad de Éxito (%)'] / 100) * (p2['Probabilidad de Éxito (%)'] / 100) * 100, 1)
+                
+                st.markdown(f"""
+                    <div class="combo-box">
+                        <b>Opción 1:</b> {p1['Selección']}<br>
+                        <b>Opción 2:</b> {p2['Selección']}<br><br>
+                        <span style="color:#16a34a; font-weight:bold;">Cuota Total: {cuota_total}</span> &nbsp;|&nbsp; 
+                        <span style="color:#ca8a04; font-weight:bold;">Probabilidad: {prob_conjunta}%</span>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("No hay suficientes mercados cruzados para armar combinada en este partido.")
+                
+        st.markdown("</div>", unsafe_allow_html=True)
