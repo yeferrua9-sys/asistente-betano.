@@ -1,5 +1,5 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 13 (Base Estable Organizada)
+Dashboard de Asistente de Inversiones Deportivas - Versión Estable y Organizada (Tarjetas por Partido)
 """
 
 import streamlit as st
@@ -80,10 +80,10 @@ JUGADORES_DB = {
 }
 
 def obtener_jugadores(equipo):
-    return JUGADORES_DB.get(equipo, {"delantero": f"Atacante Estelar ({equipo})", "mediocampista": f"Volante ({equipo})", "extremo": f"Extremo ({equipo})"})
+    return JUGADORES_DB.get(equipo, {"delantero": f"Atacante ({equipo})", "mediocampista": f"Volante ({equipo})", "extremo": f"Extremo ({equipo})"})
 
 @st.cache_data(ttl=300)
-def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
+def obtener_radar_estable(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
@@ -104,8 +104,9 @@ def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
             "oddsFormat": "decimal"
         }
         try:
-            respuesta = requests.get(url, params=params, timeout=8)
-            if respuesta.status_code != 200: continue
+            respuesta = requests.get(url, params=params, timeout=10)
+            if respuesta.status_code != 200: 
+                continue
             datos_json = respuesta.json()
         except:
             continue
@@ -115,7 +116,7 @@ def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
             try:
                 dt_utc = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00"))
                 dt_colombia = dt_utc - timedelta(hours=5)
-                fecha_str = dt_colombia.strftime("%Y-%m-%d")
+                fecha_solo = dt_colombia.date()
                 hora_str = dt_colombia.strftime("%H:%M")
             except:
                 continue
@@ -146,7 +147,7 @@ def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
                             else: cuota_empate = cuota
 
                         filas.append({
-                            "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                            "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                             "Selección": seleccion, "Mercado": "Ganador (1X2)" if tipo_mercado == "h2h" else "Total Goles (Más/Menos)",
                             "Línea": linea, "Cuota": cuota, "Probabilidad de Éxito (%)": probabilidad,
                             "Casa de Apuestas": casa_apuestas, "Categoria": "Principal", "Es_Error_Sistema": False
@@ -155,54 +156,48 @@ def obtener_radar_con_jugadores(api_key: str) -> pd.DataFrame:
                 if cuota_local and cuota_visita:
                     c_1x = round(1 / ((1/cuota_local) + (1/(cuota_empate or 3.0))), 2)
                     filas.append({
-                        "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                        "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                         "Selección": f"{equipo_local} o Empate (1X)", "Mercado": "Doble Oportunidad",
                         "Línea": "—", "Cuota": c_1x, "Probabilidad de Éxito (%)": 78.5,
                         "Casa de Apuestas": casa_apuestas, "Categoria": "Principal", "Es_Error_Sistema": False
                     })
 
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": "Más de 8.5 Córners en el partido", "Mercado": "Tiros de Esquina",
                     "Línea": "8.5", "Cuota": 1.75, "Probabilidad de Éxito (%)": 82.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo", "Es_Error_Sistema": False
                 })
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": "Más de 33.5 Saques de Banda (Laterales)", "Mercado": "Saques de Banda",
                     "Línea": "33.5", "Cuota": 1.82, "Probabilidad de Éxito (%)": 78.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo", "Es_Error_Sistema": False
                 })
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": "Más de 23.5 Faltas Totales del Partido", "Mercado": "Faltas del Partido",
                     "Línea": "23.5", "Cuota": 1.78, "Probabilidad de Éxito (%)": 80.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo", "Es_Error_Sistema": False
                 })
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": "Más de 14.5 Saques de Meta totales", "Mercado": "Saques de Meta",
                     "Línea": "14.5", "Cuota": 1.88, "Probabilidad de Éxito (%)": 75.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Equipo", "Es_Error_Sistema": False
                 })
 
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": f"{jugadores_loc['delantero']} — Más de 1.5 Remates al Arco", "Mercado": "Remates de Jugador",
                     "Línea": "1.5", "Cuota": 1.95, "Probabilidad de Éxito (%)": 79.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Jugadores", "Es_Error_Sistema": True
                 })
                 filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
+                    "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                     "Selección": f"{jugadores_vis['mediocampista']} — Más de 2.5 Faltas Cometidas", "Mercado": "Faltas Cometidas (Jugador)",
                     "Línea": "2.5", "Cuota": 1.90, "Probabilidad de Éxito (%)": 76.0,
                     "Casa de Apuestas": casa_apuestas, "Categoria": "Jugadores", "Es_Error_Sistema": True
-                })
-                filas.append({
-                    "Fecha_Obj": fecha_str, "Hora": hora_str, "Liga": liga, "Partido": partido,
-                    "Selección": f"{jugadores_loc['extremo']} — Más de 2.0 Faltas Recibidas", "Mercado": "Faltas Recibidas (Jugador)",
-                    "Línea": "2.0", "Cuota": 1.85, "Probabilidad de Éxito (%)": 81.0,
-                    "Casa de Apuestas": casa_apuestas, "Categoria": "Jugadores", "Es_Error_Sistema": False
                 })
 
     df = pd.DataFrame(filas)
@@ -228,18 +223,17 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-df_mercados = obtener_radar_con_jugadores(API_KEY)
+df_mercados = obtener_radar_estable(API_KEY)
 
 st.title(f"📊 Centro de Mando Quant — Partidos del {fecha_seleccionada.strftime('%d/%m/%Y')}")
 st.markdown("##### Detección de Errores del Sistema, Jugadores Reales y Micro-Mercados")
 
 if df_mercados.empty:
-    st.warning("Buscando partidos activos...")
+    st.warning("Cargando datos del servidor o sin conexión momentánea. Haz clic en 'Refrescar Partidos'.")
     st.stop()
 
-fecha_str_busqueda = fecha_seleccionada.strftime("%Y-%m-%d")
 df_filtrado = df_mercados[
-    (df_mercados["Fecha_Obj"] == fecha_str_busqueda) & 
+    (df_mercados["Fecha_Obj"] == fecha_seleccionada) & 
     (df_mercados["Probabilidad de Éxito (%)"] >= umbral_seguridad)
 ]
 
@@ -249,7 +243,7 @@ st.metric(f"Partidos estrictamente para hoy ({fecha_seleccionada.strftime('%d/%m
 st.divider()
 
 if len(partidos_del_dia) == 0:
-    st.warning(f"No hay partidos registrados estrictamente para el **{fecha_seleccionada.strftime('%d/%m/%Y')}** con este umbral. Prueba bajando la seguridad.")
+    st.warning(f"No hay partidos registrados estrictamente para el **{fecha_seleccionada.strftime('%d/%m/%Y')}** con este umbral. Prueba bajando la seguridad o cambiando de fecha.")
 else:
     for partido in partidos_del_dia:
         datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
