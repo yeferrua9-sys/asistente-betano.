@@ -1,13 +1,12 @@
 """
-Dashboard de Asistente de Inversiones Deportivas - FASE 9 (Tarjetas por Partido)
+Dashboard de Asistente de Inversiones Deportivas - FASE 10 (Filtro por Día Exacto + Tarjetas Individuales)
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime, timedelta
-from itertools import combinations
+from datetime import datetime, date
 
 API_KEY = "a60bb46a59d961cb702b89106cb51856"
 
@@ -24,20 +23,22 @@ st.markdown(
         .main { background-color: #0e1117; }
         .match-card {
             background-color: #1c1f26;
-            border: 1px solid #2c2f36;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border: 1px solid #374151;
+            border-radius: 14px;
+            padding: 22px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
-        .market-row {
-            background-color: #14181f;
-            padding: 10px 15px;
-            border-radius: 8px;
-            margin-top: 8px;
-            border-left: 4px solid #16a34a;
+        .market-badge {
+            background-color: #111827;
+            border-left: 4px solid #10b981;
+            padding: 10px 14px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 14px;
         }
         .combo-box {
-            background: linear-gradient(135deg, #1c1f26 0%, #14181f 100%);
+            background: linear-gradient(135deg, #1f2937 11%, #111827 100%);
             border: 1px solid #f97316;
             border-radius: 10px;
             padding: 15px;
@@ -49,7 +50,7 @@ st.markdown(
 )
 
 @st.cache_data(ttl=300)
-def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
+def obtener_radar_por_dia(api_key: str) -> pd.DataFrame:
     if not api_key or api_key == "TU_CLAVE_AQUI":
         return pd.DataFrame()
 
@@ -61,9 +62,6 @@ def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
     ]
     
     filas = []
-    hoy = datetime.now()
-    limite_futuro = hoy + timedelta(days=3)
-    
     for sport_key in sports_keys:
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
         params = {
@@ -83,11 +81,10 @@ def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
             fecha_iso = evento.get('commence_time', '')
             try:
                 dt_evento = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00").split("+")[0])
-                if dt_evento > limite_futuro or dt_evento < hoy - timedelta(hours=6):
-                    continue
-                fecha_str = dt_evento.strftime("%d/%m/%Y %H:%M")
+                fecha_solo = dt_evento.date() # Extraemos únicamente la fecha (Año-Mes-Día)
+                hora_str = dt_evento.strftime("%H:%M")
             except:
-                fecha_str = fecha_iso
+                continue
 
             liga = evento.get('sport_title', 'Fútbol Global')
             equipo_local = evento.get('home_team')
@@ -106,7 +103,7 @@ def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
                         
                         # Apuesta Principal
                         filas.append({
-                            "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                            "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                             "Selección": seleccion, "Mercado": "Ganador (1X2)" if tipo_mercado == "h2h" else "Totales (Goles/Puntos)",
                             "Línea": linea, "Cuota": cuota, "Probabilidad de Éxito (%)": probabilidad,
                             "Casa de Apuestas": casa_apuestas, "Categoria": "Principal"
@@ -115,25 +112,25 @@ def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
                         # Micro-mercados detallados por partido
                         if tipo_mercado == "totals":
                             filas.append({
-                                "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                                "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                                 "Selección": "Más de 8.5 Tiros de Esquina", "Mercado": "Córners",
                                 "Línea": "8.5", "Cuota": 1.75, "Probabilidad de Éxito (%)": 82.0,
                                 "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
-                                "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                                "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                                 "Selección": "Más de 33.5 Saques de Banda (Laterales)", "Mercado": "Saques de Banda",
                                 "Línea": "33.5", "Cuota": 1.82, "Probabilidad de Éxito (%)": 78.0,
                                 "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
-                                "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                                "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                                 "Selección": "Más de 22.5 Faltas Totales del Partido", "Mercado": "Faltas",
                                 "Línea": "22.5", "Cuota": 1.78, "Probabilidad de Éxito (%)": 80.0,
                                 "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
                             })
                             filas.append({
-                                "Fecha": fecha_str, "Liga": liga, "Partido": partido,
+                                "Fecha_Obj": fecha_solo, "Hora": hora_str, "Liga": liga, "Partido": partido,
                                 "Selección": "Jugador Destacado: Más de 1.5 Faltas Cometidas", "Mercado": "Faltas de Jugador",
                                 "Línea": "1.5", "Cuota": 1.85, "Probabilidad de Éxito (%)": 76.0,
                                 "Casa de Apuestas": casa_apuestas, "Categoria": "Micro-Mercado"
@@ -147,77 +144,88 @@ def obtener_radar_tarjetas(api_key: str) -> pd.DataFrame:
     return df
 
 with st.sidebar:
-    st.title("⚙️ Filtros de Partidos")
-    st.caption("Organización por Tarjetas")
+    st.title("⚙️ Filtro por Día Exacto")
+    st.caption("Selecciona el día que deseas analizar")
     st.divider()
+    
+    # Selector de fecha exacto (Por defecto hoy 27 de julio de 2026)
+    fecha_seleccionada = st.date_input(
+        "📅 Fecha de los partidos",
+        value=date(2026, 7, 27)
+    )
+    
     umbral_seguridad = st.slider("Seguridad Mínima (%)", 40, 90, 50, 1)
     st.divider()
     if st.button("🔄 Refrescar Partidos"):
         st.cache_data.clear()
         st.rerun()
 
-df_mercados = obtener_radar_tarjetas(API_KEY)
+df_mercados = obtener_radar_por_dia(API_KEY)
 
-st.title("📊 Centro de Mando Quant — Tarjetas por Partido")
-st.markdown("##### Cada partido con sus opciones, micro-mercados y combinadas independientes")
+st.title(f"📊 Centro de Mando Quant — Partidos del {fecha_seleccionada.strftime('%d/%m/%Y')}")
+st.markdown("##### Cada partido en su propio recuadro independiente con micro-mercados y combinadas")
 
 if df_mercados.empty:
-    st.warning("Buscando partidos activos. Intenta refrescar en unos segundos.")
+    st.warning("Buscando partidos activos. Intenta refrescar.")
     st.stop()
 
-# Filtrar por seguridad
-df_filtrado = df_mercados[df_mercados["Probabilidad de Éxito (%)"] >= umbral_seguridad]
+# Filtrar estrictamente por la fecha elegida en el calendario lateral y el umbral
+df_filtrado = df_mercados[
+    (df_mercados["Fecha_Obj"] == fecha_seleccionada) & 
+    (df_mercados["Probabilidad de Éxito (%)"] >= umbral_seguridad)
+]
 
-# Listado de partidos únicos disponibles
-partidos_disponibles = df_filtrado["Partido"].unique()
+partidos_del_dia = df_filtrado["Partido"].unique()
 
-st.metric("Partidos Disponibles Hoy", len(partidos_disponibles))
+st.metric(f"Partidos programados para el {fecha_seleccionada.strftime('%d/%m/%Y')}", len(partidos_del_dia))
 st.divider()
 
-# RENDERIZAR TARJETA INDEPENDIENTE POR CADA PARTIDO
-for partido in partidos_disponibles:
-    datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
-    liga_info = datos_partido["Liga"].iloc[0]
-    fecha_info = datos_partido["Fecha"].iloc[0]
-    
-    with st.container():
-        st.markdown(f"""
-            <div class="match-card">
-                <h3 style="margin-top:0; color:#f97316;">{partido}</h3>
-                <p style="color:#9ca3af; font-size:14px; margin-bottom:15px;">🏆 <b>{liga_info}</b> &nbsp;|&nbsp; 📅 {fecha_info}</p>
-        """, unsafe_allow_html=True)
+if len(partidos_del_dia) == 0:
+    st.info(f"No hay partidos registrados en el sistema para la fecha {fecha_seleccionada.strftime('%d/%m/%Y')}. Prueba cambiando la fecha en el menú lateral izquierdo o bajando el umbral de seguridad.")
+else:
+    # RENDERIZAR UN RECUADRO INDEPENDIENTE (CARD) POR CADA PARTIDO EXCLUSIVO DE ESTE DÍA
+    for partido in partidos_del_dia:
+        datos_partido = df_filtrado[df_filtrado["Partido"] == partido]
+        liga_info = datos_partido["Liga"].iloc[0]
+        hora_info = datos_partido["Hora"].iloc[0]
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### 🎯 Apuestas y Micro-Mercados")
-            for _, row in datos_partido.iterrows():
-                st.markdown(f"""
-                    <div class="market-row">
-                        <b>{row['Mercado']}</b>: {row['Selección']}<br>
-                        <span style="color:#9ca3af; font-size:13px;">Cuota: <b>{row['Cuota']}</b> | Prob: <b>{row['Probabilidad de Éxito (%)']}%</b></span>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-        with col2:
-            st.markdown("#### 🔥 Combinada Sugerida (Bet Builder)")
-            # Tomamos hasta 2 opciones viables de este mismo partido para armar su combinada local
-            opciones_comb = datos_partido.drop_duplicates(subset=["Mercado"])
-            if len(opciones_comb) >= 2:
-                p1 = opciones_comb.iloc[0]
-                p2 = opciones_comb.iloc[1]
-                cuota_total = round(p1['Cuota'] * p2['Cuota'], 2)
-                prob_conjunta = round((p1['Probabilidad de Éxito (%)'] / 100) * (p2['Probabilidad de Éxito (%)'] / 100) * 100, 1)
-                
-                st.markdown(f"""
-                    <div class="combo-box">
-                        <b>Opción 1:</b> {p1['Selección']}<br>
-                        <b>Opción 2:</b> {p2['Selección']}<br><br>
-                        <span style="color:#16a34a; font-weight:bold;">Cuota Total: {cuota_total}</span> &nbsp;|&nbsp; 
-                        <span style="color:#ca8a04; font-weight:bold;">Probabilidad: {prob_conjunta}%</span>
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("No hay suficientes mercados cruzados para armar combinada en este partido.")
-                
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container():
+            st.markdown(f"""
+                <div class="match-card">
+                    <h3 style="margin-top:0; color:#f97316;">⚽ {partido}</h3>
+                    <p style="color:#9ca3af; font-size:14px; margin-bottom:15px;">🏆 <b>{liga_info}</b> &nbsp;|&nbsp; ⏰ Hora: {hora_info}</p>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("##### 🎯 Opciones y Micro-Mercados")
+                for _, row in datos_partido.iterrows():
+                    st.markdown(f"""
+                        <div class="market-badge">
+                            <b>{row['Mercado']}</b>: {row['Selección']}<br>
+                            <span style="color:#9ca3af; font-size:13px;">Cuota: <b>{row['Cuota']}</b> | Probabilidad: <b>{row['Probabilidad de Éxito (%)']}%</b></span>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+            with col2:
+                st.markdown("##### 🔥 Combinada Recomendada para este Partido")
+                opciones_comb = datos_partido.drop_duplicates(subset=["Mercado"])
+                if len(opciones_comb) >= 2:
+                    p1 = opciones_comb.iloc[0]
+                    p2 = opciones_comb.iloc[1]
+                    cuota_total = round(p1['Cuota'] * p2['Cuota'], 2)
+                    prob_conjunta = round((p1['Probabilidad de Éxito (%)'] / 100) * (p2['Probabilidad de Éxito (%)'] / 100) * 100, 1)
+                    
+                    st.markdown(f"""
+                        <div class="combo-box">
+                            • <b>Selección 1:</b> {p1['Selección']}<br>
+                            • <b>Selección 2:</b> {p2['Selección']}<br><br>
+                            <span style="color:#10b981; font-weight:bold;">Cuota Total: {cuota_total}</span> &nbsp;|&nbsp; 
+                            <span style="color:#fbbf24; font-weight:bold;">Probabilidad Conjunta: {prob_conjunta}%</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.info("No hay suficientes opciones cruzadas para este encuentro.")
+                    
+            st.markdown("</div>", unsafe_allow_html=True)
