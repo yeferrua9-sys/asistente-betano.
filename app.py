@@ -1,545 +1,256 @@
 """
-Dashboard de Asistente de Inversiones Deportivas
-Fase 2: El Cerebro del Asistente (Motor de Recomendaciones sobre Mock Data)
-Enfoque: Micro-mercados (faltas, saques de banda, corners, tiros al arco)
-
-Nota: Toda la probabilidad, cuota y lógica de selección usa datos SIMULADOS.
-No hay conexión real a Betano ni a ninguna fuente de datos en vivo.
+Dashboard de Asistente de Inversiones Deportivas - FASE 4 (DATOS REALES)
+Conexión: The Odds API
+Filtro Principal: Betano (Mercados H2H y Totales)
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import requests
+from datetime import datetime
 from itertools import combinations
 
 # =========================================================
-# CONFIGURACIÓN GENERAL DE LA PÁGINA
+# 🔑 TU LLAVE DE THE ODDS API AQUÍ
+# =========================================================
+API_KEY = "a60bb46a59d961cb702b89106cb51856"
+
+# =========================================================
+# CONFIGURACIÓN GENERAL
 # =========================================================
 st.set_page_config(
-    page_title="Sports Investing Assistant | Micro-Mercados",
+    page_title="Centro de Mando Quant | Betano",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# =========================================================
-# ESTILOS PERSONALIZADOS (CSS)
-# =========================================================
 st.markdown(
     """
     <style>
-        .main {
-            background-color: #0e1117;
-        }
-        .stDataFrame {
-            border-radius: 10px;
-        }
+        .main { background-color: #0e1117; }
+        .stDataFrame { border-radius: 10px; }
         div[data-testid="stMetric"] {
-            background-color: #1c1f26;
-            padding: 15px;
-            border-radius: 10px;
-            border: 1px solid #2c2f36;
-        }
-        h1, h2, h3 {
-            font-family: 'Segoe UI', sans-serif;
-        }
-        .badge-alta {
-            background-color: #16a34a;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-        }
-        .badge-media {
-            background-color: #ca8a04;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-        }
-        .badge-baja {
-            background-color: #dc2626;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-size: 12px;
+            background-color: #1c1f26; padding: 15px;
+            border-radius: 10px; border: 1px solid #2c2f36;
         }
         .combo-card {
             background: linear-gradient(135deg, #1c1f26 0%, #14181f 100%);
-            border: 1px solid #f97316;
-            border-radius: 14px;
-            padding: 18px 20px;
-            margin-bottom: 10px;
+            border: 1px solid #f97316; border-radius: 14px;
+            padding: 18px 20px; margin-bottom: 10px;
         }
         .combo-leg {
-            padding: 6px 0;
-            border-bottom: 1px dashed #2c2f36;
-            font-size: 14px;
+            padding: 6px 0; border-bottom: 1px dashed #2c2f36; font-size: 14px;
         }
-        .combo-leg:last-child {
-            border-bottom: none;
-        }
+        .combo-leg:last-child { border-bottom: none; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =========================================================
-# DATOS BASE (catálogos para filtros)
+# EXTRACCIÓN DE DATOS REALES (THE ODDS API)
 # =========================================================
-LIGAS_FUTBOL = [
-    "LaLiga (España)",
-    "Premier League (Inglaterra)",
-    "Serie A (Italia)",
-    "Bundesliga (Alemania)",
-    "Ligue 1 (Francia)",
-    "Liga BetPlay (Colombia)",
-    "Brasileirão (Brasil)",
-    "Copa Libertadores",
-]
+@st.cache_data(ttl=300) # Se actualiza cada 5 minutos para no gastar tus créditos
+def obtener_datos_reales(deporte: str, api_key: str) -> pd.DataFrame:
+    if not api_key or api_key == "TU_CLAVE_AQUI":
+        return pd.DataFrame()
 
-LIGAS_BALONCESTO = [
-    "NBA (EE.UU.)",
-    "EuroLiga",
-    "ACB (España)",
-    "Liga Nacional de Básquet (Colombia)",
-    "BSN (Puerto Rico)",
-]
-
-MERCADOS_FUTBOL_EQUIPO = [
-    "Ganador del Partido",
-    "Total de Faltas del Equipo",
-    "Saques de Banda a Favor (Equipo)",
-    "Tiros de Esquina - Total Equipo",
-    "Tiros al Arco (Equipo)",
-]
-
-MERCADOS_FUTBOL_JUGADOR = [
-    "Total de Faltas Cometidas (Jugador)",
-    "Tiros al Arco (Jugador)",
-    "Tarjetas Amarillas (Jugador)",
-]
-
-MERCADOS_BALONCESTO_EQUIPO = [
-    "Ganador del Partido",
-    "Total de Robos (Equipo)",
-]
-
-MERCADOS_BALONCESTO_JUGADOR = [
-    "Total de Rebotes (Jugador)",
-    "Total de Asistencias (Jugador)",
-    "Total de Robos (Jugador)",
-    "Puntos + Rebotes + Asistencias",
-    "Triples Anotados (Jugador)",
-]
-
-EQUIPOS_MOCK = [
-    "Real Madrid", "FC Barcelona", "Manchester City", "Liverpool",
-    "Inter de Milán", "Bayern Múnich", "PSG", "Atlético Nacional",
-    "Millonarios FC", "Flamengo", "River Plate", "Boca Juniors",
-]
-
-JUGADORES_MOCK = [
-    "J. Bellingham", "V. Junior", "E. Haaland", "M. Salah",
-    "L. Martínez", "H. Kane", "K. Mbappé", "F. Muriel",
-    "R. Falcao", "G. Barrios", "D. Martínez", "J. Álvarez",
-]
-
-# Umbral mínimo de probabilidad para considerar una "Sencilla" destacada
-UMBRAL_SENCILLAS = 85.0
-# Rango de probabilidad aceptado para las patas de una Combinada
-UMBRAL_MIN_COMBINADA = 60.0
-
-
-# =========================================================
-# FUNCIÓN GENERADORA DE MOCK DATA (ahora agrupada por "Partido")
-# =========================================================
-def generar_datos_mock(deporte: str, liga: str, tipo_mercado: str, n_filas: int = 25) -> pd.DataFrame:
-    """
-    Genera un DataFrame simulado de micro-mercados deportivos, agrupado
-    por partido (Equipo A vs Equipo B). Agrupar por partido es lo que
-    permite luego construir "Combinadas" lógicas del mismo evento.
-
-    Esta función NO contiene lógica predictiva real: solo crea
-    datos de ejemplo con la estructura que usará el dashboard.
-    """
-    np.random.seed(hash((liga, tipo_mercado, n_filas)) % (2**32))
-
-    if deporte == "Fútbol":
-        mercados_equipo = MERCADOS_FUTBOL_EQUIPO
-        mercados_jugador = MERCADOS_FUTBOL_JUGADOR
-    else:
-        mercados_equipo = MERCADOS_BALONCESTO_EQUIPO
-        mercados_jugador = MERCADOS_BALONCESTO_JUGADOR
-
-    # 1) Generar un pool de "partidos" (Equipo A vs Equipo B)
-    n_partidos = max(3, n_filas // 6)
-    partidos = []
-    equipos_disponibles = EQUIPOS_MOCK.copy()
-    np.random.shuffle(equipos_disponibles)
-    for i in range(n_partidos):
-        equipo_a = equipos_disponibles[(2 * i) % len(equipos_disponibles)]
-        equipo_b = equipos_disponibles[(2 * i + 1) % len(equipos_disponibles)]
-        if equipo_a == equipo_b:
-            continue
-        fecha = (datetime.now() + timedelta(days=int(np.random.randint(0, 7)))).strftime("%Y-%m-%d")
-        partidos.append({
-            "partido": f"{equipo_a} vs {equipo_b}",
-            "equipo_a": equipo_a,
-            "equipo_b": equipo_b,
-            "fecha": fecha,
-        })
-
-    # 2) Generar filas de micro-mercados repartidas entre esos partidos
+    # Mapeo de deportes para la API
+    sport_key = "soccer_upcoming" if deporte == "Fútbol" else "basketball_upcoming"
+    
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": "eu,uk,us", # Regiones amplias para asegurar captura de cuotas
+        "markets": "h2h,totals", 
+        "oddsFormat": "decimal"
+    }
+    
+    try:
+        respuesta = requests.get(url, params=params, timeout=15)
+        respuesta.raise_for_status()
+        datos_json = respuesta.json()
+    except Exception as e:
+        st.error(f"Error de conexión con la API: {e}")
+        return pd.DataFrame()
+        
     filas = []
-    for _ in range(n_filas):
-        partido = partidos[np.random.randint(0, len(partidos))]
-        equipo = np.random.choice([partido["equipo_a"], partido["equipo_b"]])
-        usa_mercado_jugador = np.random.rand() < 0.6
+    for evento in datos_json:
+        liga = evento.get('sport_title', 'Desconocida')
+        equipo_local = evento.get('home_team')
+        equipo_visitante = evento.get('away_team')
+        partido = f"{equipo_local} vs {equipo_visitante}"
+        
+        # Formato de fecha
+        fecha_iso = evento.get('commence_time', '')
+        try:
+            fecha = datetime.fromisoformat(fecha_iso.replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
+        except:
+            fecha = fecha_iso
 
-        if usa_mercado_jugador:
-            mercado = np.random.choice(mercados_jugador)
-            jugador = np.random.choice(JUGADORES_MOCK)
-        else:
-            mercado = np.random.choice(mercados_equipo)
-            jugador = "—"
-
-        if mercado == "Ganador del Partido":
-            linea_texto = f"Gana {equipo}"
-        else:
-            linea = round(np.random.uniform(1.5, 9.5), 1)
-            linea_texto = f"Más de {linea}"
-
-        # Cuota simulada (formato decimal, típico de Betano)
-        cuota = round(np.random.uniform(1.35, 3.80), 2)
-
-        # Probabilidad de éxito simulada (placeholder, sin modelo real de datos en vivo)
-        probabilidad = round(np.random.uniform(45, 96), 1)
-
-        if tipo_mercado == "Combinadas":
-            n_selecciones = int(np.random.randint(2, 5))
-            etiqueta_tipo = "Combinada"
-        else:
-            n_selecciones = 1
-            etiqueta_tipo = "Sencilla"
-
-        valor_referencial = round((probabilidad / 100) * cuota, 2)
-
-        filas.append({
-            "Fecha": partido["fecha"],
-            "Liga": liga,
-            "Partido": partido["partido"],
-            "Equipo": equipo,
-            "Jugador": jugador,
-            "Mercado": mercado,
-            "Línea": linea_texto,
-            "Cuota": cuota,
-            "Probabilidad de Éxito (%)": probabilidad,
-            "Tipo de Apuesta": etiqueta_tipo,
-            "N° Selecciones": n_selecciones,
-            "Valor Referencial": valor_referencial,
-        })
-
+        for bookmaker in evento.get('bookmakers', []):
+            casa_apuestas = bookmaker['title']
+            
+            for mercado in bookmaker.get('markets', []):
+                tipo_mercado = mercado['key']
+                
+                for outcome in mercado.get('outcomes', []):
+                    seleccion = outcome['name']
+                    cuota = outcome['price']
+                    linea = outcome.get('point', '—')
+                    
+                    # Cálculo matemático: Probabilidad Implícita basada en la cuota real
+                    probabilidad_implicita = round((1 / cuota) * 100, 1)
+                    
+                    filas.append({
+                        "Fecha": fecha,
+                        "Liga": liga,
+                        "Partido": partido,
+                        "Selección": seleccion,
+                        "Mercado": "Ganador (1X2)" if tipo_mercado == "h2h" else "Totales (Over/Under)",
+                        "Línea": linea,
+                        "Cuota": cuota,
+                        "Probabilidad de Éxito (%)": probabilidad_implicita,
+                        "Casa de Apuestas": casa_apuestas
+                    })
+                    
     df = pd.DataFrame(filas)
+    
+    if not df.empty:
+        # 🎯 FILTRO ESTRATÉGICO: Priorizar Betano
+        df_betano = df[df["Casa de Apuestas"].str.contains("Betano", case=False, na=False)]
+        if not df_betano.empty:
+            df = df_betano # Si Betano tiene cuotas, desechamos el resto
+            
     return df
 
-
-def badge_probabilidad(valor: float) -> str:
-    """Devuelve un badge HTML de color según el rango de probabilidad."""
-    if valor >= 75:
-        return f'<span class="badge-alta">{valor}%</span>'
-    elif valor >= 60:
-        return f'<span class="badge-media">{valor}%</span>'
-    else:
-        return f'<span class="badge-baja">{valor}%</span>'
-
-
 # =========================================================
-# MOTOR DE RECOMENDACIONES (Fase 2)
+# MOTOR DE RECOMENDACIONES 
 # =========================================================
-def obtener_sencillas_top(df: pd.DataFrame, umbral: float = UMBRAL_SENCILLAS) -> pd.DataFrame:
-    """
-    Filtra las apuestas individuales (micro-mercados) cuya probabilidad
-    de éxito simulada supera el umbral definido.
-    """
-    if df.empty:
-        return df
-    top = df[df["Probabilidad de Éxito (%)"] >= umbral].copy()
-    top = top.sort_values("Probabilidad de Éxito (%)", ascending=False)
-    return top
+def obtener_sencillas_top(df: pd.DataFrame, umbral: float) -> pd.DataFrame:
+    if df.empty: return df
+    return df[df["Probabilidad de Éxito (%)"] >= umbral].sort_values("Probabilidad de Éxito (%)", ascending=False)
 
-
-def resaltar_fila_verde(row: pd.Series) -> list:
-    """Aplica fondo verde a toda la fila (usado con df.style.apply)."""
+def resaltar_verde(row):
     return ["background-color: #14532d; color: white;"] * len(row)
 
-
-def armar_combinada_sugerida(df: pd.DataFrame, min_prob: float = UMBRAL_MIN_COMBINADA,
-                              max_patas: int = 3) -> dict | None:
-    """
-    Bet Builder simplificado: busca, dentro de un mismo partido, entre 2 y
-    `max_patas` micro-mercados cuya probabilidad individual supere `min_prob`,
-    y arma una combinada multiplicando las cuotas.
-
-    Prioriza el partido cuya combinación de patas tenga la mejor
-    probabilidad conjunta simulada (producto de probabilidades).
-
-    Retorna un diccionario con las patas elegidas y la cuota total,
-    o None si no hay suficientes candidatos.
-    """
-    if df.empty or "Partido" not in df.columns:
-        return None
-
+def armar_combinada_sugerida(df: pd.DataFrame, min_prob: float) -> dict | None:
+    if df.empty or "Partido" not in df.columns: return None
     candidatos = df[df["Probabilidad de Éxito (%)"] >= min_prob].copy()
-    if candidatos.empty:
-        return None
+    if candidatos.empty: return None
 
-    mejor_combo = None
-    mejor_score = -1.0
+    mejor_combo, mejor_score = None, -1.0
 
     for partido, grupo in candidatos.groupby("Partido"):
-        grupo = grupo.drop_duplicates(subset=["Mercado", "Línea"])
-        if len(grupo) < 2:
-            continue
-
-        n_patas = min(max_patas, len(grupo))
-        # Se evalúan combinaciones de 2 y hasta n_patas mercados del mismo partido
+        grupo = grupo.drop_duplicates(subset=["Mercado", "Línea", "Selección"])
+        if len(grupo) < 2: continue
+        
+        n_patas = min(3, len(grupo))
         for r in range(2, n_patas + 1):
             for combo_idx in combinations(grupo.index, r):
                 patas = grupo.loc[list(combo_idx)]
                 prob_conjunta = np.prod(patas["Probabilidad de Éxito (%)"] / 100)
-                score = prob_conjunta  # métrica simple para elegir la mejor combinada
-
-                if score > mejor_score:
-                    mejor_score = score
-                    cuota_total = float(np.prod(patas["Cuota"]))
+                
+                if prob_conjunta > mejor_score:
+                    mejor_score = prob_conjunta
                     mejor_combo = {
                         "partido": partido,
                         "patas": patas.to_dict("records"),
-                        "cuota_total": round(cuota_total, 2),
+                        "cuota_total": round(float(np.prod(patas["Cuota"])), 2),
                         "probabilidad_conjunta": round(prob_conjunta * 100, 1),
                     }
-
     return mejor_combo
 
-
 # =========================================================
-# SIDEBAR — FILTROS
+# INTERFAZ Y SIDEBAR
 # =========================================================
 with st.sidebar:
-    st.title("⚙️ Filtros del Dashboard")
-    st.caption("Configura el mercado que deseas analizar")
-
+    st.title("⚙️ Filtros Reales")
+    st.caption("Conectado a The Odds API")
     st.divider()
-
-    deporte = st.selectbox(
-        "🏟️ Deporte",
-        options=["Fútbol", "Baloncesto"],
-        index=0,
-    )
-
-    if deporte == "Fútbol":
-        ligas_disponibles = LIGAS_FUTBOL
-    else:
-        ligas_disponibles = LIGAS_BALONCESTO
-
-    liga = st.selectbox(
-        "🏆 Liga",
-        options=ligas_disponibles,
-        index=0,
-    )
-
-    tipo_mercado = st.radio(
-        "🎯 Tipo de Mercado",
-        options=["Sencillas", "Combinadas"],
-        index=0,
-        horizontal=True,
-    )
-
+    deporte = st.selectbox("🏟️ Deporte", ["Fútbol", "Baloncesto"])
+    
     st.divider()
-
-    n_filas = st.slider(
-        "Cantidad de eventos simulados",
-        min_value=10,
-        max_value=60,
-        value=30,
-        step=5,
-    )
-
+    st.markdown("**🧠 Motor de Búsqueda de Valor**")
+    umbral_sencillas = st.slider("Umbral Sencillas (Seguridad %)", 50, 95, 75, 1)
+    umbral_combinada = st.slider("Umbral por Pata - Combinada (%)", 50, 90, 65, 1)
+    
     st.divider()
-
-    st.markdown("**🧠 Parámetros del Motor de Recomendación**")
-    umbral_sencillas_sel = st.slider(
-        "Umbral mínimo — Sencillas (%)",
-        min_value=70,
-        max_value=95,
-        value=int(UMBRAL_SENCILLAS),
-        step=1,
-    )
-    umbral_combinada_sel = st.slider(
-        "Umbral mínimo por pata — Combinada (%)",
-        min_value=50,
-        max_value=85,
-        value=int(UMBRAL_MIN_COMBINADA),
-        step=1,
-    )
-
-    st.divider()
-    st.caption("📌 Fase 2: Motor de recomendación sobre datos simulados.")
-
+    if st.button("🔄 Refrescar Cuotas en Vivo"):
+        st.cache_data.clear()
+        st.rerun()
 
 # =========================================================
-# GENERAR DATOS (una sola vez por corrida, usados en todo el dashboard)
+# PROCESAMIENTO
 # =========================================================
-df_mercados = generar_datos_mock(deporte, liga, tipo_mercado, n_filas)
-df_sencillas_top = obtener_sencillas_top(df_mercados, umbral=umbral_sencillas_sel)
-combinada_sugerida = armar_combinada_sugerida(df_mercados, min_prob=umbral_combinada_sel)
+df_mercados = obtener_datos_reales(deporte, API_KEY)
 
+st.title("📊 Centro de Mando Quant")
+st.markdown("##### Análisis de Cuotas en Vivo (Prioridad: Betano)")
 
-# =========================================================
-# ENCABEZADO PRINCIPAL
-# =========================================================
-st.title("📊 Sports Investing Assistant")
-st.markdown(
-    "##### Análisis de micro-mercados: faltas, saques de banda, corners y tiros al arco"
-)
+if API_KEY == "TU_CLAVE_AQUI":
+    st.error("⚠️ **Falta la API KEY.** Por favor pon tu clave de The Odds API en la línea 17 del código.")
+    st.stop()
 
-col_a, col_b, col_c, col_d = st.columns(4)
-col_a.metric("Deporte", deporte)
-col_b.metric("Liga Seleccionada", liga)
-col_c.metric("Tipo de Mercado", tipo_mercado)
-col_d.metric("Eventos Cargados", len(df_mercados))
+if df_mercados.empty:
+    st.warning("No se encontraron cuotas para los próximos partidos en este momento. Intenta cambiar de deporte o refrescar más tarde.")
+    st.stop()
+
+df_sencillas_top = obtener_sencillas_top(df_mercados, umbral=umbral_sencillas)
+combinada_sugerida = armar_combinada_sugerida(df_mercados, min_prob=umbral_combinada)
+
+# MÉTRICAS
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Deporte", deporte)
+c2.metric("Partidos Analizados", df_mercados["Partido"].nunique())
+c3.metric("Opciones de Apuesta", len(df_mercados))
+c4.metric("Casa Principal", df_mercados["Casa de Apuestas"].iloc[0])
 
 st.divider()
 
 # =========================================================
-# 🚨 ALERTAS Y RECOMENDACIONES (parte superior del dashboard)
+# ALERTAS DEL SISTEMA
 # =========================================================
-st.subheader("🚨 Recomendaciones del Motor (Fase 2)")
-
 col_izq, col_der = st.columns([1.1, 1])
 
-# --- Columna izquierda: mejores Sencillas ---
 with col_izq:
-    st.markdown(f"**✅ Mejores Sencillas — Probabilidad ≥ {umbral_sencillas_sel}%**")
-
-    if df_sencillas_top.empty:
-        st.warning(
-            "No se encontraron micro-mercados sencillos que superen el umbral "
-            f"de {umbral_sencillas_sel}% con los datos simulados actuales. "
-            "Prueba bajar el umbral o generar más eventos.",
-            icon="⚠️",
-        )
-    else:
-        mejor_fila = df_sencillas_top.iloc[0]
-        st.success(
-            f"Mejor pick simulado: **{mejor_fila['Mercado']}** "
-            f"({mejor_fila['Equipo']}{'' if mejor_fila['Jugador'] == '—' else ' — ' + mejor_fila['Jugador']}) "
-            f"en *{mejor_fila['Partido']}* → **{mejor_fila['Probabilidad de Éxito (%)']}%** "
-            f"de probabilidad simulada, cuota **{mejor_fila['Cuota']}**.",
-            icon="🎯",
-        )
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Sencillas Destacadas", len(df_sencillas_top))
-        m2.metric("Probabilidad Promedio", f"{df_sencillas_top['Probabilidad de Éxito (%)'].mean():.1f}%")
-        m3.metric("Cuota Promedio", f"{df_sencillas_top['Cuota'].mean():.2f}")
-
-        tabla_verde = df_sencillas_top[[
-            "Partido", "Equipo", "Jugador", "Mercado", "Línea",
-            "Cuota", "Probabilidad de Éxito (%)",
-        ]].reset_index(drop=True)
-
+    st.markdown(f"**✅ Mejores Picks (Sencillas ≥ {umbral_sencillas}%)**")
+    if not df_sencillas_top.empty:
         st.dataframe(
-            tabla_verde.style.apply(resaltar_fila_verde, axis=1),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-# --- Columna derecha: Bet Builder / Combinada sugerida ---
-with col_der:
-    st.markdown("**🔥 Combinada Sugerida (Bet Builder)**")
-
-    if combinada_sugerida is None:
-        st.warning(
-            "No se encontró una combinación lógica de 2 o 3 micro-mercados "
-            f"del mismo partido con probabilidad individual ≥ {umbral_combinada_sel}%. "
-            "Prueba bajar el umbral o generar más eventos.",
-            icon="⚠️",
+            df_sencillas_top.head(10).style.apply(resaltar_verde, axis=1),
+            use_container_width=True, hide_index=True
         )
     else:
+        st.info("No hay cuotas con esa seguridad. Baja el umbral en el menú izquierdo.")
+
+with col_der:
+    st.markdown("**🔥 Combinada Sugerida (Mismo Partido)**")
+    if combinada_sugerida:
         patas_html = ""
         for pata in combinada_sugerida["patas"]:
-            jugador_txt = "" if pata["Jugador"] == "—" else f" ({pata['Jugador']})"
-            patas_html += (
-                f'<div class="combo-leg">'
-                f'⚽ <b>{pata["Mercado"]}</b>{jugador_txt} — {pata["Línea"]}<br>'
-                f'<span style="color:#9ca3af;">Prob. simulada: {pata["Probabilidad de Éxito (%)"]}% '
-                f'| Cuota: {pata["Cuota"]}</span>'
-                f'</div>'
-            )
-
+            linea_txt = f" (Línea: {pata['Línea']})" if pata['Línea'] != '—' else ""
+            patas_html += f"""
+                <div class="combo-leg">
+                    ⚽ <b>{pata['Mercado']}</b>: {pata['Selección']}{linea_txt}<br>
+                    <span style="color:#9ca3af;">Prob: {pata['Probabilidad de Éxito (%)']}% | Cuota: {pata['Cuota']}</span>
+                </div>
+            """
         st.markdown(
             f"""
             <div class="combo-card">
-                <h4 style="margin-top:0;">🔥 Combinada Sugerida</h4>
-                <p style="color:#9ca3af; margin-bottom:10px;">
-                    Partido: <b>{combinada_sugerida['partido']}</b> ·
-                    {len(combinada_sugerida['patas'])} selecciones
-                </p>
+                <h4 style="margin-top:0;">{combinada_sugerida['partido']}</h4>
                 {patas_html}
             </div>
-            """,
-            unsafe_allow_html=True,
+            """, unsafe_allow_html=True
         )
-
-        c1, c2 = st.columns(2)
-        c1.metric("Cuota Total Combinada", f"{combinada_sugerida['cuota_total']}")
-        c2.metric("Prob. Conjunta Simulada", f"{combinada_sugerida['probabilidad_conjunta']}%")
-
-st.divider()
-
-# =========================================================
-# TABLA COMPLETA DE MICRO-MERCADOS
-# =========================================================
-st.subheader("📋 Tabla Completa de Micro-Mercados")
-st.caption("Datos simulados — todos los eventos generados, sin filtrar por umbral")
-
-st.dataframe(
-    df_mercados,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Cuota": st.column_config.NumberColumn(format="%.2f"),
-        "Probabilidad de Éxito (%)": st.column_config.ProgressColumn(
-            "Probabilidad de Éxito (%)",
-            min_value=0,
-            max_value=100,
-            format="%.1f%%",
-        ),
-        "Valor Referencial": st.column_config.NumberColumn(format="%.2f"),
-    },
-)
+        sub1, sub2 = st.columns(2)
+        sub1.metric("Cuota Total", f"{combinada_sugerida['cuota_total']}")
+        sub2.metric("Prob. Conjunta", f"{combinada_sugerida['probabilidad_conjunta']}%")
+    else:
+        st.info("No se encontró una combinada matemática viable. Ajusta el umbral.")
 
 st.divider()
-
-# =========================================================
-# RESUMEN RÁPIDO
-# =========================================================
-st.subheader("📈 Resumen Rápido")
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Probabilidad Promedio (Todos)", f"{df_mercados['Probabilidad de Éxito (%)'].mean():.1f}%")
-col2.metric("Cuota Promedio (Todos)", f"{df_mercados['Cuota'].mean():.2f}")
-col3.metric(
-    "Mercado Más Frecuente",
-    df_mercados["Mercado"].mode()[0] if not df_mercados.empty else "—",
-)
-
-st.info(
-    "Este dashboard se encuentra en **Fase 2**: motor de recomendación (Sencillas + Bet Builder) "
-    "operando sobre datos **100% simulados**. Las siguientes fases podrán incorporar "
-    "fuentes de datos reales y modelos estadísticos más robustos.",
-    icon="🛠️",
-)
+with st.expander("📋 Ver todo el radar de cuotas sin filtrar"):
+    st.dataframe(df_mercados, use_container_width=True, hide_index=True)
