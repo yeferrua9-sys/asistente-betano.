@@ -1,7 +1,10 @@
 import streamlit as st
 import pandas as pd
 import requests
+import numpy as np
+
 from datetime import datetime, date
+
 
 # ============================================================
 # CONFIGURACIÓN
@@ -15,6 +18,7 @@ st.set_page_config(
 )
 
 TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
+
 
 # ============================================================
 # ESTILO
@@ -41,6 +45,7 @@ section[data-testid="stSidebar"] {
 .main-title {
     font-size: 42px;
     font-weight: 800;
+    margin-bottom: 4px;
 }
 
 .subtitle {
@@ -72,18 +77,6 @@ section[data-testid="stSidebar"] {
 
 .gray {
     color: #9ca3af;
-}
-
-.green {
-    color: #10b981;
-}
-
-.yellow {
-    color: #f59e0b;
-}
-
-.red {
-    color: #ef4444;
 }
 
 .section-title {
@@ -131,143 +124,42 @@ div[data-testid="stMetric"] {
 
 
 # ============================================================
-# PETICIÓN GENÉRICA
+# UTILIDADES
 # ============================================================
 
-def tsdb_request(endpoint, params=None):
+def safe_value(value, fallback="No disponible"):
 
-    url = f"{TSDB_BASE_URL}/{endpoint}"
+    if value is None:
+        return fallback
 
     try:
+        if pd.isna(value):
+            return fallback
+    except Exception:
+        pass
 
-        response = requests.get(
-            url,
-            params=params or {},
-            timeout=15
+    if str(value).strip() == "":
+        return fallback
+
+    return value
+
+
+def format_date_display(value):
+
+    if not value:
+        return "No disponible"
+
+    try:
+        parsed = datetime.strptime(
+            str(value),
+            "%Y-%m-%d"
         )
 
-        if response.status_code != 200:
-            return None, f"HTTP_{response.status_code}"
+        return parsed.strftime("%d/%m/%Y")
 
-        return response.json(), "OK"
+    except Exception:
+        return str(value)
 
-    except requests.RequestException as error:
-
-        return None, f"CONNECTION_ERROR: {error}"
-
-    except ValueError:
-
-        return None, "JSON_ERROR"
-
-
-# ============================================================
-# EVENTOS DEL DÍA
-# ============================================================
-
-@st.cache_data(ttl=300)
-def get_events_day(selected_date, sport_filter):
-
-    params = {
-        "d": selected_date
-    }
-
-    if sport_filter != "Todos":
-        params["s"] = sport_filter
-
-    data, status = tsdb_request(
-        "eventsday.php",
-        params
-    )
-
-    if status != "OK":
-        return [], status
-
-    events = data.get("events") or []
-
-    if not events:
-        return [], "NO_EVENTS"
-
-    return events, "OK"
-
-
-# ============================================================
-# EVENTOS DE EQUIPO — HISTORIAL
-# ============================================================
-
-@st.cache_data(ttl=600)
-def get_team_history(team_id):
-
-    if not team_id:
-        return [], "NO_TEAM_ID"
-
-    data, status = tsdb_request(
-        "eventslast.php",
-        {
-            "id": team_id
-        }
-    )
-
-    if status != "OK":
-        return [], status
-
-    events = data.get("results") or data.get("events") or []
-
-    return events, "OK"
-
-
-# ============================================================
-# RESULTADOS DE EVENTO
-# ============================================================
-
-@st.cache_data(ttl=600)
-def get_event_results(event_id):
-
-    if not event_id:
-        return [], "NO_EVENT_ID"
-
-    data, status = tsdb_request(
-        "eventresults.php",
-        {
-            "id": event_id
-        }
-    )
-
-    if status != "OK":
-        return [], status
-
-    results = data.get("results") or []
-
-    return results, "OK"
-
-
-# ============================================================
-# ESTADÍSTICAS DEL EVENTO
-# ============================================================
-
-@st.cache_data(ttl=600)
-def get_event_stats(event_id):
-
-    if not event_id:
-        return [], "NO_EVENT_ID"
-
-    data, status = tsdb_request(
-        "lookupeventstats.php",
-        {
-            "id": event_id
-        }
-    )
-
-    if status != "OK":
-        return [], status
-
-    stats = data.get("eventstats") or []
-
-    return stats, "OK"
-
-
-# ============================================================
-# FORMATO HORA
-# ============================================================
 
 def format_time(event):
 
@@ -292,6 +184,51 @@ def format_time(event):
         return raw[:5]
 
     return "--"
+
+
+# ============================================================
+# THE SPORTS DB — EVENTOS DEL DÍA
+# ============================================================
+
+@st.cache_data(ttl=300)
+def get_events_day(selected_date, sport_filter):
+
+    url = f"{TSDB_BASE_URL}/eventsday.php"
+
+    params = {
+        "d": selected_date
+    }
+
+    if sport_filter != "Todos":
+        params["s"] = sport_filter
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return [], f"HTTP_{response.status_code}"
+
+        data = response.json()
+
+        events = data.get("events") or []
+
+        if not events:
+            return [], "NO_EVENTS"
+
+        return events, "OK"
+
+    except requests.RequestException as error:
+
+        return [], f"CONNECTION_ERROR: {error}"
+
+    except ValueError:
+
+        return [], "JSON_ERROR"
 
 
 # ============================================================
@@ -329,6 +266,10 @@ def events_to_dataframe(events):
                 "No disponible"
             ),
 
+            "IDLiga": event.get(
+                "idLeague"
+            ),
+
             "Evento": matchup,
 
             "Fecha": event.get(
@@ -342,13 +283,9 @@ def events_to_dataframe(events):
 
             "Visitante": away or "",
 
-            "IDLocal": event.get(
-                "idHomeTeam"
-            ),
+            "IDLocal": event.get("idHomeTeam"),
 
-            "IDVisitante": event.get(
-                "idAwayTeam"
-            ),
+            "IDVisitante": event.get("idAwayTeam"),
 
             "Estadio": event.get(
                 "strVenue",
@@ -393,110 +330,100 @@ def events_to_dataframe(events):
 
 
 # ============================================================
-# HISTORIAL → DATAFRAME
+# HISTÓRICO DE EQUIPO
 # ============================================================
 
-def history_to_dataframe(events, team_id):
+@st.cache_data(ttl=3600)
+def get_team_history(team_id):
+
+    if not team_id:
+        return [], "NO_TEAM_ID"
+
+    url = f"{TSDB_BASE_URL}/eventslast.php"
+
+    params = {
+        "id": team_id
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            return [], f"HTTP_{response.status_code}"
+
+        data = response.json()
+
+        events = data.get("results") or []
+
+        if not events:
+            return [], "NO_HISTORY"
+
+        return events, "OK"
+
+    except requests.RequestException as error:
+
+        return [], f"CONNECTION_ERROR: {error}"
+
+    except ValueError:
+
+        return [], "JSON_ERROR"
+
+
+# ============================================================
+# HISTÓRICO → DATAFRAME
+# ============================================================
+
+def history_to_dataframe(events):
 
     rows = []
 
     for event in events:
 
-        home_id = event.get("idHomeTeam")
-        away_id = event.get("idAwayTeam")
+        home = event.get("strHomeTeam")
+        away = event.get("strAwayTeam")
 
-        home = event.get("strHomeTeam", "")
-        away = event.get("strAwayTeam", "")
+        home_score = event.get("intHomeScore")
+        away_score = event.get("intAwayScore")
 
         try:
-
-            home_score = (
-                int(event["intHomeScore"])
-                if event.get("intHomeScore") not in [None, ""]
-                else None
-            )
-
-        except (ValueError, TypeError):
-
+            home_score = int(home_score)
+            away_score = int(away_score)
+        except (TypeError, ValueError):
             home_score = None
-
-        try:
-
-            away_score = (
-                int(event["intAwayScore"])
-                if event.get("intAwayScore") not in [None, ""]
-                else None
-            )
-
-        except (ValueError, TypeError):
-
             away_score = None
-
-        if home_score is None or away_score is None:
-            continue
-
-        if str(home_id) == str(team_id):
-
-            team_side = "Home"
-
-            team_goals = home_score
-            opponent_goals = away_score
-
-            opponent = away
-
-            if home_score > away_score:
-                result = "W"
-            elif home_score == away_score:
-                result = "D"
-            else:
-                result = "L"
-
-        else:
-
-            team_side = "Away"
-
-            team_goals = away_score
-            opponent_goals = home_score
-
-            opponent = home
-
-            if away_score > home_score:
-                result = "W"
-            elif away_score == home_score:
-                result = "D"
-            else:
-                result = "L"
 
         rows.append({
 
+            "ID": event.get("idEvent"),
+
             "Fecha": event.get(
-                "dateEvent"
+                "dateEvent",
+                ""
             ),
-
-            "Equipo": event.get(
-                "strHomeTeam"
-            )
-            if str(home_id) == str(team_id)
-            else event.get("strAwayTeam"),
-
-            "Rival": opponent,
-
-            "LocalVisitante": team_side,
-
-            "GF": team_goals,
-
-            "GC": opponent_goals,
-
-            "Resultado": result,
 
             "Liga": event.get(
                 "strLeague",
                 ""
             ),
 
-            "IDEvento": event.get(
-                "idEvent"
+            "Temporada": event.get(
+                "strSeason",
+                ""
             ),
+
+            "Local": home or "",
+
+            "Visitante": away or "",
+
+            "GolesLocal": home_score,
+
+            "GolesVisitante": away_score,
+
         })
 
     df = pd.DataFrame(rows)
@@ -517,56 +444,90 @@ def history_to_dataframe(events, team_id):
 
 
 # ============================================================
-# MÉTRICAS HISTÓRICAS
+# ESTADÍSTICAS DE FORMA
 # ============================================================
 
-def calculate_team_metrics(df):
+def calculate_team_form(history_df, team_id, team_name, n=5):
 
-    if df.empty:
+    if history_df.empty:
+        return None
 
-        return {
+    relevant = history_df[
+        (
+            history_df["Local"] == team_name
+        )
+        |
+        (
+            history_df["Visitante"] == team_name
+        )
+    ].copy()
 
-            "Partidos": 0,
-            "Victorias": 0,
-            "Empates": 0,
-            "Derrotas": 0,
-            "GF": 0,
-            "GC": 0,
-            "GF_Partido": 0,
-            "GC_Partido": 0,
-            "Puntos": 0,
-            "PPG": 0,
-
-        }
-
-    matches = len(df)
-
-    wins = int(
-        (df["Resultado"] == "W").sum()
+    relevant = relevant.dropna(
+        subset=[
+            "GolesLocal",
+            "GolesVisitante"
+        ]
     )
 
-    draws = int(
-        (df["Resultado"] == "D").sum()
-    )
+    if relevant.empty:
+        return None
 
-    losses = int(
-        (df["Resultado"] == "L").sum()
-    )
+    relevant = relevant.head(n)
 
-    goals_for = float(
-        df["GF"].sum()
-    )
+    points = 0
+    wins = 0
+    draws = 0
+    losses = 0
 
-    goals_against = float(
-        df["GC"].sum()
-    )
+    goals_for = 0
+    goals_against = 0
 
-    points = (
-        wins * 3
-        + draws
-    )
+    home_matches = 0
+    away_matches = 0
+
+    for _, row in relevant.iterrows():
+
+        is_home = row["Local"] == team_name
+
+        if is_home:
+
+            gf = row["GolesLocal"]
+            ga = row["GolesVisitante"]
+
+            home_matches += 1
+
+        else:
+
+            gf = row["GolesVisitante"]
+            ga = row["GolesLocal"]
+
+            away_matches += 1
+
+        goals_for += gf
+        goals_against += ga
+
+        if gf > ga:
+
+            wins += 1
+            points += 3
+
+        elif gf == ga:
+
+            draws += 1
+            points += 1
+
+        else:
+
+            losses += 1
+
+    matches = len(relevant)
+
+    if matches == 0:
+        return None
 
     return {
+
+        "Equipo": team_name,
 
         "Partidos": matches,
 
@@ -576,88 +537,120 @@ def calculate_team_metrics(df):
 
         "Derrotas": losses,
 
-        "GF": goals_for,
-
-        "GC": goals_against,
-
-        "GF_Partido":
-            round(goals_for / matches, 2),
-
-        "GC_Partido":
-            round(goals_against / matches, 2),
-
         "Puntos": points,
 
-        "PPG":
-            round(points / matches, 2),
+        "Puntos_por_partido":
+            points / matches,
+
+        "Goles_favor":
+            goals_for,
+
+        "Goles_contra":
+            goals_against,
+
+        "GF_por_partido":
+            goals_for / matches,
+
+        "GC_por_partido":
+            goals_against / matches,
+
+        "Diferencia_goles":
+            goals_for - goals_against,
+
+        "Local_partidos":
+            home_matches,
+
+        "Visitante_partidos":
+            away_matches,
 
     }
 
 
 # ============================================================
-# MÉTRICAS RECIENTES
+# DATASET DEL EVENTO
 # ============================================================
 
-def recent_form(df, n=5):
-
-    if df.empty:
-        return []
-
-    return (
-        df.head(n)["Resultado"]
-        .tolist()
-    )
-
-
-# ============================================================
-# SAFE VALUE
-# ============================================================
-
-def safe_value(
-    value,
-    fallback="No disponible"
+def build_match_features(
+    selected,
+    home_history,
+    away_history
 ):
 
-    if value is None:
-        return fallback
+    home_name = selected["Local"]
+    away_name = selected["Visitante"]
 
-    try:
+    home_form = calculate_team_form(
+        home_history,
+        selected["IDLocal"],
+        home_name,
+        n=5
+    )
 
-        if pd.isna(value):
-            return fallback
+    away_form = calculate_team_form(
+        away_history,
+        selected["IDVisitante"],
+        away_name,
+        n=5
+    )
 
-    except Exception:
-        pass
+    if home_form is None or away_form is None:
+        return None
 
-    if str(value).strip() == "":
-        return fallback
+    features = {
 
-    return value
+        "Partido":
+            f"{home_name} vs {away_name}",
 
+        "Local":
+            home_name,
 
-# ============================================================
-# FECHA
-# ============================================================
+        "Visitante":
+            away_name,
 
-def format_date_display(value):
+        "Local_PPP":
+            home_form["Puntos_por_partido"],
 
-    if not value:
-        return "No disponible"
+        "Visitante_PPP":
+            away_form["Puntos_por_partido"],
 
-    try:
+        "Local_GF":
+            home_form["GF_por_partido"],
 
-        parsed = datetime.strptime(
-            str(value),
-            "%Y-%m-%d"
-        )
+        "Visitante_GF":
+            away_form["GF_por_partido"],
 
-        return parsed.strftime(
-            "%d/%m/%Y"
-        )
+        "Local_GC":
+            home_form["GC_por_partido"],
 
-    except Exception:
+        "Visitante_GC":
+            away_form["GC_por_partido"],
 
-        return str(value)
+        "Local_DG":
+            home_form["Diferencia_goles"],
+
+        "Visitante_DG":
+            away_form["Diferencia_goles"],
+
+        "Local_Victorias":
+            home_form["Victorias"],
+
+        "Visitante_Victorias":
+            away_form["Victorias"],
+
+        "Local_Derrotas":
+            home_form["Derrotas"],
+
+        "Visitante_Derrotas":
+            away_form["Derrotas"],
+
+        "Local_Muestra":
+            home_form["Partidos"],
+
+        "Visitante_Muestra":
+            away_form["Partidos"],
+    }
+
+    return features
 
 
 # ============================================================
@@ -666,12 +659,10 @@ def format_date_display(value):
 
 with st.sidebar:
 
-    st.markdown(
-        "## ⚙️ Centro de Mando"
-    )
+    st.markdown("## ⚙️ Centro de Mando")
 
     st.caption(
-        "Sports Data Hub — FASE 7"
+        "Sports Data Hub — FASE 8"
     )
 
     st.divider()
@@ -699,6 +690,22 @@ with st.sidebar:
             "American Football",
             "Athletics",
         ]
+    )
+
+    st.divider()
+
+    st.markdown("### 🧠 Histórico")
+
+    history_window = st.slider(
+        "Partidos recientes",
+        min_value=3,
+        max_value=10,
+        value=5
+    )
+
+    st.caption(
+        "La fase actual utiliza los últimos "
+        "partidos disponibles de cada equipo."
     )
 
     st.divider()
@@ -747,9 +754,7 @@ events, event_status = get_events_day(
     sport_filter
 )
 
-df_events = events_to_dataframe(
-    events
-)
+df_events = events_to_dataframe(events)
 
 
 # ============================================================
@@ -787,19 +792,27 @@ with status3:
 
 
 # ============================================================
-# ERROR
+# MENSAJES
 # ============================================================
 
-if event_status == "NO_EVENTS":
+if event_status.startswith("CONNECTION_ERROR"):
+
+    st.error(
+        "No fue posible conectar con TheSportsDB."
+    )
+
+elif event_status == "NO_EVENTS":
 
     st.info(
-        "No hay eventos para la fecha seleccionada."
+        f"No se encontraron eventos para "
+        f"{selected_date.strftime('%d/%m/%Y')}."
     )
 
 elif event_status != "OK":
 
-    st.error(
-        f"Error obteniendo datos: {event_status}"
+    st.warning(
+        f"Estado de la fuente deportiva: "
+        f"{event_status}"
     )
 
 
@@ -844,24 +857,27 @@ c4.metric(
 # FILTROS
 # ============================================================
 
-if not df_events.empty:
+st.markdown(
+    '<div class="section-title">'
+    '🔎 Filtrar partidos'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-    st.markdown(
-        '<div class="section-title">'
-        '🔎 Filtrar partidos'
-        '</div>',
-        unsafe_allow_html=True
-    )
+if not df_events.empty:
 
     f1, f2 = st.columns(2)
 
     with f1:
 
         league_options = sorted(
-            df_events["Liga"]
-            .dropna()
-            .unique()
-            .tolist()
+            [
+                x for x in
+                df_events["Liga"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+            ]
         )
 
         selected_league = st.selectbox(
@@ -872,10 +888,13 @@ if not df_events.empty:
     with f2:
 
         country_options = sorted(
-            df_events["País"]
-            .dropna()
-            .unique()
-            .tolist()
+            [
+                x for x in
+                df_events["País"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+            ]
         )
 
         selected_country = st.selectbox(
@@ -888,15 +907,13 @@ if not df_events.empty:
     if selected_league != "Todas":
 
         filtered = filtered[
-            filtered["Liga"]
-            == selected_league
+            filtered["Liga"] == selected_league
         ]
 
     if selected_country != "Todos":
 
         filtered = filtered[
-            filtered["País"]
-            == selected_country
+            filtered["País"] == selected_country
         ]
 
 else:
@@ -918,7 +935,7 @@ st.markdown(
 if filtered.empty:
 
     st.info(
-        "No hay partidos disponibles."
+        "No hay eventos deportivos."
     )
 
 else:
@@ -934,14 +951,14 @@ else:
 
         st.markdown(
             f'<div class="gray">'
-            f'{safe_value(row["Liga"])}'
+            f'{safe_value(row["Liga"], "Competición")}'
             f'</div>',
             unsafe_allow_html=True
         )
 
         st.markdown(
             f'<div class="team">'
-            f'{safe_value(row["Evento"])}'
+            f'{safe_value(row["Evento"], "Evento deportivo")}'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -955,11 +972,31 @@ else:
             unsafe_allow_html=True
         )
 
+        location_parts = []
+
+        for field in [
+            "Estadio",
+            "Ciudad",
+            "País"
+        ]:
+
+            value = safe_value(
+                row[field],
+                ""
+            )
+
+            if value:
+                location_parts.append(
+                    value
+                )
+
+        location = " · ".join(
+            location_parts
+        )
+
         st.markdown(
             f'<div class="gray">'
-            f'📍 {safe_value(row["Estadio"])}'
-            f' · '
-            f'{safe_value(row["País"])}'
+            f'📍 {location or "Ubicación no disponible"}'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -970,7 +1007,7 @@ else:
         )
 
         if st.button(
-            "🔍 Analizar evento",
+            "🔍 Analizar histórico",
             key=f"analyze_{event_id}"
         ):
 
@@ -982,7 +1019,7 @@ else:
 
 
 # ============================================================
-# ANÁLISIS
+# EVENTO SELECCIONADO
 # ============================================================
 
 selected_event_id = st.session_state.get(
@@ -992,8 +1029,7 @@ selected_event_id = st.session_state.get(
 if selected_event_id is not None:
 
     selected_rows = df_events[
-        df_events["ID"]
-        == selected_event_id
+        df_events["ID"] == selected_event_id
     ]
 
     if not selected_rows.empty:
@@ -1004,7 +1040,7 @@ if selected_event_id is not None:
 
         st.markdown(
             '<div class="section-title">'
-            '🎯 Análisis cuantitativo'
+            '🎯 Análisis del evento'
             '</div>',
             unsafe_allow_html=True
         )
@@ -1019,246 +1055,281 @@ if selected_event_id is not None:
         )
 
         # ====================================================
-        # HISTORIAL LOCAL
+        # DATOS
         # ====================================================
-
-        home_id = selected["IDLocal"]
-
-        away_id = selected["IDVisitante"]
-
-        home_history, home_status = (
-            get_team_history(home_id)
-        )
-
-        away_history, away_status = (
-            get_team_history(away_id)
-        )
-
-        home_df = history_to_dataframe(
-            home_history,
-            home_id
-        )
-
-        away_df = history_to_dataframe(
-            away_history,
-            away_id
-        )
-
-        # ====================================================
-        # MÉTRICAS
-        # ====================================================
-
-        home_metrics = calculate_team_metrics(
-            home_df
-        )
-
-        away_metrics = calculate_team_metrics(
-            away_df
-        )
 
         st.markdown(
             '<div class="section-title">'
-            '📊 Rendimiento histórico'
+            '📋 Datos del evento'
             '</div>',
             unsafe_allow_html=True
         )
 
-        metric_table = pd.DataFrame({
+        a1, a2, a3, a4 = st.columns(4)
 
-            "Métrica": [
-                "Partidos",
-                "Victorias",
-                "Empates",
-                "Derrotas",
-                "Goles a favor",
-                "Goles en contra",
-                "GF / partido",
-                "GC / partido",
-                "Puntos",
-                "Puntos / partido",
-            ],
-
-            safe_value(
-                selected["Local"],
-                "Local"
-            ): [
-                home_metrics["Partidos"],
-                home_metrics["Victorias"],
-                home_metrics["Empates"],
-                home_metrics["Derrotas"],
-                home_metrics["GF"],
-                home_metrics["GC"],
-                home_metrics["GF_Partido"],
-                home_metrics["GC_Partido"],
-                home_metrics["Puntos"],
-                home_metrics["PPG"],
-            ],
-
-            safe_value(
-                selected["Visitante"],
-                "Visitante"
-            ): [
-                away_metrics["Partidos"],
-                away_metrics["Victorias"],
-                away_metrics["Empates"],
-                away_metrics["Derrotas"],
-                away_metrics["GF"],
-                away_metrics["GC"],
-                away_metrics["GF_Partido"],
-                away_metrics["GC_Partido"],
-                away_metrics["Puntos"],
-                away_metrics["PPG"],
-            ],
-        })
-
-        st.dataframe(
-            metric_table,
-            use_container_width=True,
-            hide_index=True
+        a1.metric(
+            "Deporte",
+            safe_value(selected["Deporte"])
         )
+
+        a2.metric(
+            "Competición",
+            safe_value(selected["Liga"])
+        )
+
+        a3.metric(
+            "Fecha",
+            format_date_display(selected["Fecha"])
+        )
+
+        a4.metric(
+            "Hora",
+            safe_value(selected["Hora"], "--")
+        )
+
+        # ====================================================
+        # HISTÓRICO LOCAL
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '📚 Histórico del local'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        home_history_raw, home_status = get_team_history(
+            selected["IDLocal"]
+        )
+
+        home_history = history_to_dataframe(
+            home_history_raw
+        )
+
+        # ====================================================
+        # HISTÓRICO VISITANTE
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '📚 Histórico del visitante'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        away_history_raw, away_status = get_team_history(
+            selected["IDVisitante"]
+        )
+
+        away_history = history_to_dataframe(
+            away_history_raw
+        )
+
+        # ====================================================
+        # ESTADO HISTÓRICO
+        # ====================================================
+
+        h1, h2 = st.columns(2)
+
+        with h1:
+
+            if home_status == "OK":
+
+                st.success(
+                    f"Histórico disponible: "
+                    f"{len(home_history)} registros"
+                )
+
+            else:
+
+                st.warning(
+                    f"Histórico local: "
+                    f"{home_status}"
+                )
+
+        with h2:
+
+            if away_status == "OK":
+
+                st.success(
+                    f"Histórico disponible: "
+                    f"{len(away_history)} registros"
+                )
+
+            else:
+
+                st.warning(
+                    f"Histórico visitante: "
+                    f"{away_status}"
+                )
 
         # ====================================================
         # FORMA
         # ====================================================
 
-        st.markdown(
-            '<div class="section-title">'
-            '🔥 Forma reciente'
-            '</div>',
-            unsafe_allow_html=True
+        home_form = calculate_team_form(
+            home_history,
+            selected["IDLocal"],
+            selected["Local"],
+            history_window
         )
 
-        form1, form2 = st.columns(2)
+        away_form = calculate_team_form(
+            away_history,
+            selected["IDVisitante"],
+            selected["Visitante"],
+            history_window
+        )
 
-        with form1:
+        if home_form and away_form:
 
             st.markdown(
-                f"### 🏠 {safe_value(selected['Local'])}"
+                '<div class="section-title">'
+                '📊 Variables de forma'
+                '</div>',
+                unsafe_allow_html=True
             )
 
-            form = recent_form(
-                home_df,
-                5
+            form_df = pd.DataFrame([
+
+                {
+                    "Variable": "Partidos analizados",
+                    selected["Local"]:
+                        home_form["Partidos"],
+                    selected["Visitante"]:
+                        away_form["Partidos"],
+                },
+
+                {
+                    "Variable": "Puntos por partido",
+                    selected["Local"]:
+                        round(
+                            home_form["Puntos_por_partido"],
+                            3
+                        ),
+                    selected["Visitante"]:
+                        round(
+                            away_form["Puntos_por_partido"],
+                            3
+                        ),
+                },
+
+                {
+                    "Variable": "Goles por partido",
+                    selected["Local"]:
+                        round(
+                            home_form["GF_por_partido"],
+                            3
+                        ),
+                    selected["Visitante"]:
+                        round(
+                            away_form["GF_por_partido"],
+                            3
+                        ),
+                },
+
+                {
+                    "Variable": "Goles recibidos/partido",
+                    selected["Local"]:
+                        round(
+                            home_form["GC_por_partido"],
+                            3
+                        ),
+                    selected["Visitante"]:
+                        round(
+                            away_form["GC_por_partido"],
+                            3
+                        ),
+                },
+
+                {
+                    "Variable": "Victorias",
+                    selected["Local"]:
+                        home_form["Victorias"],
+                    selected["Visitante"]:
+                        away_form["Victorias"],
+                },
+
+                {
+                    "Variable": "Empates",
+                    selected["Local"]:
+                        home_form["Empates"],
+                    selected["Visitante"]:
+                        away_form["Empates"],
+                },
+
+                {
+                    "Variable": "Derrotas",
+                    selected["Local"]:
+                        home_form["Derrotas"],
+                    selected["Visitante"]:
+                        away_form["Derrotas"],
+                },
+
+                {
+                    "Variable": "Diferencia de goles",
+                    selected["Local"]:
+                        home_form["Diferencia_goles"],
+                    selected["Visitante"]:
+                        away_form["Diferencia_goles"],
+                },
+
+            ])
+
+            st.dataframe(
+                form_df,
+                use_container_width=True,
+                hide_index=True
             )
 
-            if form:
+            # =================================================
+            # DATASET DEL MODELO
+            # =================================================
 
-                st.write(
-                    " → ".join(form)
+            features = build_match_features(
+                selected,
+                home_history,
+                away_history
+            )
+
+            if features:
+
+                st.markdown(
+                    '<div class="section-title">'
+                    '🧠 Dataset preparado para modelo'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+                feature_df = pd.DataFrame(
+                    [features]
+                )
+
+                st.dataframe(
+                    feature_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                st.success(
+                    "🟢 Las variables históricas "
+                    "fueron calculadas desde datos "
+                    "obtenidos de TheSportsDB."
                 )
 
             else:
 
-                st.info(
-                    "No hay suficiente historial."
+                st.warning(
+                    "No hay suficiente histórico "
+                    "válido para construir las variables."
                 )
 
-        with form2:
+        else:
 
-            st.markdown(
-                f"### ✈️ {safe_value(selected['Visitante'])}"
+            st.warning(
+                "No se pudo construir la forma "
+                "reciente de ambos equipos."
             )
-
-            form = recent_form(
-                away_df,
-                5
-            )
-
-            if form:
-
-                st.write(
-                    " → ".join(form)
-                )
-
-            else:
-
-                st.info(
-                    "No hay suficiente historial."
-                )
-
-        # ====================================================
-        # DATASET
-        # ====================================================
-
-        st.markdown(
-            '<div class="section-title">'
-            '🧮 Variables disponibles para el modelo'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-        feature_data = {
-
-            "home_matches":
-                home_metrics["Partidos"],
-
-            "away_matches":
-                away_metrics["Partidos"],
-
-            "home_win_rate":
-                round(
-                    home_metrics["Victorias"]
-                    / home_metrics["Partidos"],
-                    4
-                )
-                if home_metrics["Partidos"]
-                else None,
-
-            "away_win_rate":
-                round(
-                    away_metrics["Victorias"]
-                    / away_metrics["Partidos"],
-                    4
-                )
-                if away_metrics["Partidos"]
-                else None,
-
-            "home_draw_rate":
-                round(
-                    home_metrics["Empates"]
-                    / home_metrics["Partidos"],
-                    4
-                )
-                if home_metrics["Partidos"]
-                else None,
-
-            "away_draw_rate":
-                round(
-                    away_metrics["Empates"]
-                    / away_metrics["Partidos"],
-                    4
-                )
-                if away_metrics["Partidos"]
-                else None,
-
-            "home_goals_for_avg":
-                home_metrics["GF_Partido"],
-
-            "away_goals_for_avg":
-                away_metrics["GF_Partido"],
-
-            "home_goals_against_avg":
-                home_metrics["GC_Partido"],
-
-            "away_goals_against_avg":
-                away_metrics["GC_Partido"],
-
-            "home_points_per_game":
-                home_metrics["PPG"],
-
-            "away_points_per_game":
-                away_metrics["PPG"],
-        }
-
-        feature_df = pd.DataFrame(
-            [feature_data]
-        )
-
-        st.dataframe(
-            feature_df,
-            use_container_width=True,
-            hide_index=True
-        )
 
         # ====================================================
         # CUOTAS
@@ -1271,10 +1342,9 @@ if selected_event_id is not None:
             unsafe_allow_html=True
         )
 
-        st.warning(
-            "🟡 Cuotas pendientes de conectar. "
-            "No se calculará EV ni Value sin una fuente "
-            "real de mercado."
+        st.info(
+            "Las cuotas continúan fuera de esta fase. "
+            "No se mostrarán valores inventados."
         )
 
         # ====================================================
@@ -1288,10 +1358,10 @@ if selected_event_id is not None:
             unsafe_allow_html=True
         )
 
-        st.info(
-            "Las variables históricas ya están siendo "
-            "preparadas. El siguiente paso será entrenar "
-            "el modelo estadístico con un dataset histórico."
+        st.warning(
+            "🟡 Modelo todavía no entrenado. "
+            "La FASE 8 prepara las variables reales "
+            "que alimentarán el entrenamiento."
         )
 
         # ====================================================
@@ -1308,29 +1378,26 @@ if selected_event_id is not None:
         v1, v2, v3 = st.columns(3)
 
         v1.metric(
-            "Probabilidad modelo",
-            "—"
+            "Edge",
+            "Pendiente"
         )
 
         v2.metric(
-            "Edge",
-            "—"
+            "EV",
+            "Pendiente"
         )
 
         v3.metric(
-            "EV",
-            "—"
-        )
-
-        st.caption(
-            "Bloqueado hasta disponer de modelo "
-            "estadístico y cuotas reales."
+            "Value Score",
+            "Pendiente"
         )
 
 
 # ============================================================
 # INTEGRIDAD
 # ============================================================
+
+st.divider()
 
 st.markdown(
     '<div class="section-title">'
@@ -1340,14 +1407,25 @@ st.markdown(
 )
 
 st.markdown(
-    """
-    <div class="card">
+    '<div class="card">',
+    unsafe_allow_html=True
+)
 
-    🟢 Datos deportivos: reales.
+st.markdown(
+    """
+    <b>Reglas del Centro de Mando</b>
 
     <br><br>
 
-    🟢 Datos históricos: obtenidos desde TheSportsDB.
+    🟢 Datos deportivos obtenidos de fuente real.
+
+    <br><br>
+
+    🟢 Histórico obtenido de TheSportsDB.
+
+    <br><br>
+
+    🟢 Variables calculadas a partir de datos históricos.
 
     <br><br>
 
@@ -1359,15 +1437,24 @@ st.markdown(
 
     <br>
 
-    🔒 No se fabrica Value.
+    🔒 No se fabrica Value Score.
+
+    <br>
+
+    🔒 No se utiliza una estimación manual como
+    probabilidad de modelo.
 
     <br><br>
 
-    El modelo solo utilizará variables derivadas
-    de datos disponibles y trazables.
-
-    </div>
+    El modelo predictivo se activará únicamente
+    cuando exista un dataset suficiente y
+    pueda ser entrenado y validado correctamente.
     """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -1381,83 +1468,97 @@ with st.expander(
 ):
 
     st.markdown("""
-    ## FASE 7
-
-    ### CAPA 1 — Eventos
+    ### CAPA 1 — Datos deportivos
 
     TheSportsDB
 
-    ↓
+    Eventos → Equipos → Ligas → Fechas
 
-    Partidos reales
+    🟢 Activa
+
+    ---
 
     ### CAPA 2 — Histórico
 
-    Equipos
+    Partidos anteriores → resultados → forma
 
-    ↓
+    🟢 Activa
 
-    Resultados anteriores
-
-    ↓
-
-    GF / GC / W / D / L
-
-    ↓
-
-    Forma reciente
+    ---
 
     ### CAPA 3 — Feature Engineering
 
-    Variables del local
+    Forma reciente
+    → goles
+    → puntos
+    → victorias
+    → derrotas
+    → diferencia de goles
 
-    +
+    🟢 Activa
 
-    Variables del visitante
+    ---
 
+    ### CAPA 4 — Dataset
+
+    Partido
     ↓
-
-    Dataset predictivo
-
-    ### CAPA 4 — Modelo
-
-    Dataset histórico
-
+    Variables históricas
     ↓
+    Dataset de entrenamiento
 
-    Entrenamiento
+    🟢 Preparado
 
+    ---
+
+    ### CAPA 5 — Modelo
+
+    Variables
     ↓
+    Modelo estadístico
+    ↓
+    Probabilidad propia
 
-    Probabilidad 1X2
+    🟡 Siguiente fase
 
-    ### CAPA 5 — Mercado
+    ---
+
+    ### CAPA 6 — Mercado
 
     Cuotas reales
-
     ↓
-
     Probabilidad implícita
-
-    ### CAPA 6 — Quant
-
-    Probabilidad modelo
-
     ↓
+    Comparación
 
+    🟡 Pendiente
+
+    ---
+
+    ### CAPA 7 — Motor Quant
+
+    Probabilidad propia
+    ↓
     Edge
-
     ↓
-
     EV
-
     ↓
-
     Value Score
-
     ↓
-
     Ranking
+
+    🟡 Pendiente
+
+    ---
+
+    ### CAPA 8 — Dashboard
+
+    Información real
+    + modelo
+    + mercado
+    + motor Quant
+
+    🟡 En construcción
     """)
 
 
@@ -1468,5 +1569,5 @@ with st.expander(
 st.divider()
 
 st.caption(
-    "Centro de Mando Quant · Sports Data Hub · FASE 7"
+    "Centro de Mando Quant · Sports Data Hub · FASE 8"
 )
