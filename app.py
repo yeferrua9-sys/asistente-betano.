@@ -15,7 +15,6 @@ st.set_page_config(
 )
 
 TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
-ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
 
 # ============================================================
 # ESTILO VISUAL
@@ -68,19 +67,12 @@ section[data-testid="stSidebar"] {
 }
 
 .team {
-    font-size: 20px;
+    font-size: 21px;
     font-weight: 700;
 }
 
-.vs {
-    color: #6b7280;
-    font-size: 14px;
-    text-align: center;
-}
-
-.odd {
-    font-size: 22px;
-    font-weight: 800;
+.gray {
+    color: #9ca3af;
 }
 
 .green {
@@ -93,10 +85,6 @@ section[data-testid="stSidebar"] {
 
 .red {
     color: #ef4444;
-}
-
-.gray {
-    color: #9ca3af;
 }
 
 .section-title {
@@ -144,42 +132,7 @@ div[data-testid="stMetric"] {
 
 
 # ============================================================
-# MAPEO THE ODDS API
-# ============================================================
-
-ODDS_SPORTS = {
-    "Fútbol": {
-        "soccer_epl": "Premier League",
-        "soccer_uefa_champs_league": "Champions League",
-        "soccer_uefa_europa_league": "Europa League",
-        "soccer_spain_la_liga": "La Liga",
-        "soccer_italy_serie_a": "Serie A",
-        "soccer_germany_bundesliga": "Bundesliga",
-    },
-
-    "Baloncesto": {
-        "basketball_nba": "NBA",
-        "basketball_wnba": "WNBA",
-        "basketball_ncaab": "NCAAB",
-    },
-
-    "Béisbol": {
-        "baseball_mlb": "MLB",
-    },
-
-    "Hockey": {
-        "icehockey_nhl": "NHL",
-    },
-
-    "Fútbol americano": {
-        "americanfootball_nfl": "NFL",
-        "americanfootball_ncaaf": "NCAAF",
-    },
-}
-
-
-# ============================================================
-# THE SPORTSB DB
+# THE SPORTS DB — EVENTOS
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -187,7 +140,9 @@ def get_events_day(selected_date, sport_filter):
 
     url = f"{TSDB_BASE_URL}/eventsday.php"
 
-    params = {"d": selected_date}
+    params = {
+        "d": selected_date
+    }
 
     if sport_filter != "Todos":
         params["s"] = sport_filter
@@ -201,13 +156,16 @@ def get_events_day(selected_date, sport_filter):
         )
 
         if response.status_code != 200:
-            return [], f"HTTP {response.status_code}"
+            return [], f"HTTP_{response.status_code}"
 
         data = response.json()
 
         events = data.get("events") or []
 
-        return events, "OK" if events else "NO_EVENTS"
+        if not events:
+            return [], "NO_EVENTS"
+
+        return events, "OK"
 
     except requests.RequestException as error:
 
@@ -262,7 +220,6 @@ def events_to_dataframe(events):
 
         if home and away:
             matchup = f"{home} vs {away}"
-
         else:
             matchup = event.get(
                 "strEvent",
@@ -270,144 +227,109 @@ def events_to_dataframe(events):
             )
 
         rows.append({
+
             "ID": event.get("idEvent"),
-            "Deporte": event.get("strSport"),
-            "Liga": event.get("strLeague"),
+
+            "Deporte": event.get(
+                "strSport",
+                "No disponible"
+            ),
+
+            "Liga": event.get(
+                "strLeague",
+                "No disponible"
+            ),
+
             "Evento": matchup,
-            "Fecha": event.get("dateEvent"),
+
+            "Fecha": event.get(
+                "dateEvent",
+                ""
+            ),
+
             "Hora": format_time(event),
-            "Local": home,
-            "Visitante": away,
-            "Estadio": event.get("strVenue"),
-            "Ciudad": event.get("strCity"),
-            "País": event.get("strCountry"),
+
+            "Local": home or "",
+
+            "Visitante": away or "",
+
+            "Estadio": event.get(
+                "strVenue",
+                ""
+            ),
+
+            "Ciudad": event.get(
+                "strCity",
+                ""
+            ),
+
+            "País": event.get(
+                "strCountry",
+                ""
+            ),
+
+            "Temporada": event.get(
+                "strSeason",
+                ""
+            ),
+
+            "Ronda": event.get(
+                "intRound",
+                ""
+            ),
+
+            "Estado": event.get(
+                "strStatus",
+                ""
+            ),
+
+            "ResultadoLocal": event.get(
+                "intHomeScore"
+            ),
+
+            "ResultadoVisitante": event.get(
+                "intAwayScore"
+            ),
         })
 
     return pd.DataFrame(rows)
 
 
 # ============================================================
-# THE ODDS API
+# UTILIDADES
 # ============================================================
 
-@st.cache_data(ttl=120)
-def get_odds(
-    api_key,
-    sport_key,
-    regions,
-    market
-):
+def safe_value(value, fallback="No disponible"):
 
-    if not api_key:
-        return [], "NO_API_KEY"
+    if value is None:
+        return fallback
 
-    url = f"{ODDS_BASE_URL}/sports/{sport_key}/odds"
+    if pd.isna(value):
+        return fallback
 
-    params = {
-        "apiKey": api_key,
-        "regions": regions,
-        "markets": market,
-        "oddsFormat": "decimal",
-    }
+    if str(value).strip() == "":
+        return fallback
+
+    return value
+
+
+def format_date_display(value):
+
+    if not value:
+        return "No disponible"
 
     try:
 
-        response = requests.get(
-            url,
-            params=params,
-            timeout=20
+        parsed = datetime.strptime(
+            str(value),
+            "%Y-%m-%d"
         )
 
-        if response.status_code == 401:
-            return [], "INVALID_API_KEY"
+        return parsed.strftime("%d/%m/%Y")
 
-        if response.status_code == 429:
-            return [], "RATE_LIMIT"
+    except Exception:
 
-        if response.status_code != 200:
-            return [], f"HTTP_{response.status_code}"
-
-        data = response.json()
-
-        return data or [], "OK"
-
-    except requests.RequestException as error:
-
-        return [], f"CONNECTION_ERROR: {error}"
-
-    except ValueError:
-
-        return [], "JSON_ERROR"
-
-
-# ============================================================
-# CUOTAS → DATAFRAME
-# ============================================================
-
-def odds_to_dataframe(data):
-
-    rows = []
-
-    for event in data:
-
-        home = event.get("home_team", "")
-        away = event.get("away_team", "")
-
-        for bookmaker in event.get("bookmakers", []):
-
-            bookmaker_name = bookmaker.get(
-                "title",
-                "Casa"
-            )
-
-            for market in bookmaker.get("markets", []):
-
-                market_key = market.get("key")
-
-                for outcome in market.get(
-                    "outcomes",
-                    []
-                ):
-
-                    price = outcome.get("price")
-
-                    if price is None:
-                        continue
-
-                    rows.append({
-                        "Evento": f"{home} vs {away}",
-                        "Selección": outcome.get("name"),
-                        "Cuota": float(price),
-                        "Casa": bookmaker_name,
-                        "Mercado": market_key,
-                        "Inicio": event.get(
-                            "commence_time"
-                        ),
-                    })
-
-    return pd.DataFrame(rows)
-
-
-# ============================================================
-# MOTOR QUANT
-# ============================================================
-
-def implied_probability(odds):
-
-    if odds is None or odds <= 1:
-        return None
-
-    return 1 / odds
-
-
-def calculate_ev(probability, odds):
-
-    if probability is None:
-        return None
-
-    return (
-        probability * odds
-    ) - 1
+        return str(value)
 
 
 # ============================================================
@@ -418,7 +340,7 @@ with st.sidebar:
 
     st.markdown("## ⚙️ Centro de Mando")
 
-    st.caption("Sports Data Hub — FASE 5")
+    st.caption("Sports Data Hub — FASE 6")
 
     st.divider()
 
@@ -449,30 +371,11 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("### 💰 Mercado")
+    st.markdown("### 🔎 Filtros")
 
-    odds_api_key = st.text_input(
-        "API Key de The Odds API",
-        type="password"
-    )
-
-    odds_region = st.selectbox(
-        "Región",
-        [
-            "us,uk,eu",
-            "us",
-            "uk",
-            "eu",
-        ]
-    )
-
-    odds_market = st.selectbox(
-        "Mercado",
-        [
-            "h2h",
-            "spreads",
-            "totals",
-        ]
+    st.caption(
+        "Los filtros de competición y país "
+        "se aplican después de cargar los eventos."
     )
 
     st.divider()
@@ -483,6 +386,12 @@ with st.sidebar:
     ):
 
         st.cache_data.clear()
+
+        st.session_state.pop(
+            "selected_event_id",
+            None
+        )
+
         st.rerun()
 
 
@@ -497,14 +406,14 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'Sports Data Hub · Datos reales · Cuotas reales · Análisis cuantitativo'
+    'Sports Data Hub · Datos deportivos reales · Motor Quant'
     '</div>',
     unsafe_allow_html=True
 )
 
 
 # ============================================================
-# ESTADO
+# OBTENER EVENTOS
 # ============================================================
 
 events, event_status = get_events_day(
@@ -514,6 +423,10 @@ events, event_status = get_events_day(
 
 df_events = events_to_dataframe(events)
 
+
+# ============================================================
+# ESTADOS DEL SISTEMA
+# ============================================================
 
 status1, status2, status3 = st.columns(3)
 
@@ -528,23 +441,12 @@ with status1:
 
 with status2:
 
-    if odds_api_key:
-
-        st.markdown(
-            '<div class="status status-green">'
-            '🟢 CUOTAS CONECTADAS'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
-    else:
-
-        st.markdown(
-            '<div class="status status-yellow">'
-            '🟡 CUOTAS PENDIENTES'
-            '</div>',
-            unsafe_allow_html=True
-        )
+    st.markdown(
+        '<div class="status status-yellow">'
+        '🟡 CUOTAS PENDIENTES'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
 with status3:
 
@@ -553,6 +455,31 @@ with status3:
         '🟡 MODELO PREDICTIVO PENDIENTE'
         '</div>',
         unsafe_allow_html=True
+    )
+
+
+# ============================================================
+# MENSAJES DE CONEXIÓN
+# ============================================================
+
+if event_status == "CONNECTION_ERROR":
+
+    st.error(
+        "No fue posible conectar con TheSportsDB."
+    )
+
+elif event_status == "NO_EVENTS":
+
+    st.info(
+        f"No se encontraron eventos para "
+        f"{selected_date.strftime('%d/%m/%Y')} "
+        f"con los filtros seleccionados."
+    )
+
+elif event_status != "OK":
+
+    st.warning(
+        f"Estado de la fuente deportiva: {event_status}"
     )
 
 
@@ -607,10 +534,13 @@ if not df_events.empty:
     with f1:
 
         league_options = sorted(
-            df_events["Liga"]
-            .dropna()
-            .unique()
-            .tolist()
+            [
+                x for x in
+                df_events["Liga"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+            ]
         )
 
         selected_league = st.selectbox(
@@ -621,10 +551,13 @@ if not df_events.empty:
     with f2:
 
         country_options = sorted(
-            df_events["País"]
-            .dropna()
-            .unique()
-            .tolist()
+            [
+                x for x in
+                df_events["País"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+            ]
         )
 
         selected_country = st.selectbox(
@@ -663,323 +596,390 @@ st.markdown(
 if filtered.empty:
 
     st.info(
-        "No hay eventos deportivos para los filtros seleccionados."
+        "No hay eventos deportivos para los "
+        "filtros seleccionados."
     )
 
 else:
 
-    for index, row in filtered.iterrows():
+    for _, row in filtered.iterrows():
 
-        with st.container():
+        event_id = row["ID"]
 
-            st.markdown(
-                f"""
-                <div class="match-card">
+        st.markdown(
+            '<div class="match-card">',
+            unsafe_allow_html=True
+        )
 
-                    <div class="gray">
-                    {row["Liga"] or "Competición no disponible"}
-                    </div>
+        st.markdown(
+            f'<div class="gray">'
+            f'{safe_value(row["Liga"], "Competición no disponible")}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
-                    <br>
+        st.markdown(
+            f'<div class="team">'
+            f'{safe_value(row["Evento"], "Evento deportivo")}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
-                    <div class="team">
-                    {row["Evento"]}
-                    </div>
+        st.markdown(
+            f'<div class="gray">'
+            f'📅 {format_date_display(row["Fecha"])}'
+            f' &nbsp;&nbsp; '
+            f'⏰ {safe_value(row["Hora"], "--")}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
-                    <br>
+        location_parts = []
 
-                    <div class="gray">
-                    📅 {row["Fecha"]}
-                    &nbsp;&nbsp; ⏰ {row["Hora"]}
-                    </div>
-
-                    <div class="gray">
-                    📍 {row["Estadio"] or "Estadio no disponible"}
-                    &nbsp; · &nbsp;
-                    {row["Ciudad"] or ""}
-                    &nbsp; · &nbsp;
-                    {row["País"] or ""}
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+        if safe_value(row["Estadio"], "") != "":
+            location_parts.append(
+                safe_value(row["Estadio"], "")
             )
 
-            if st.button(
-                "🔍 Analizar evento",
-                key=f"analyze_{row['ID']}"
-            ):
+        if safe_value(row["Ciudad"], "") != "":
+            location_parts.append(
+                safe_value(row["Ciudad"], "")
+            )
 
-                st.session_state[
-                    "selected_event"
-                ] = row["Evento"]
+        if safe_value(row["País"], "") != "":
+            location_parts.append(
+                safe_value(row["País"], "")
+            )
+
+        location = " · ".join(location_parts)
+
+        st.markdown(
+            f'<div class="gray">'
+            f'📍 {location if location else "Ubicación no disponible"}'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        if st.button(
+            "🔍 Analizar evento",
+            key=f"analyze_{event_id}",
+            use_container_width=False
+        ):
+
+            st.session_state[
+                "selected_event_id"
+            ] = event_id
+
+            st.rerun()
 
 
 # ============================================================
 # EVENTO SELECCIONADO
 # ============================================================
 
-selected_event = st.session_state.get(
-    "selected_event"
+selected_event_id = st.session_state.get(
+    "selected_event_id"
 )
 
-if selected_event:
+if selected_event_id is not None:
 
-    st.divider()
+    selected_rows = df_events[
+        df_events["ID"] == selected_event_id
+    ]
 
-    st.markdown(
-        '<div class="section-title">'
-        '🎯 Análisis del evento'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    if not selected_rows.empty:
 
-    st.markdown(
-        f"""
-        <div class="card">
+        selected = selected_rows.iloc[0]
 
-        <div class="team">
-        {selected_event}
-        </div>
+        st.divider()
 
-        <br>
+        st.markdown(
+            '<div class="section-title">'
+            '🎯 Análisis del evento'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
-        <div class="gray">
-        Este evento fue seleccionado para análisis.
-        </div>
+        st.markdown(
+            f'<div class="card">'
+            f'<div class="team">'
+            f'{safe_value(selected["Evento"])}'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+        # ====================================================
+        # DATOS DEL EVENTO
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '📋 Datos del evento'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        a1, a2, a3, a4 = st.columns(4)
+
+        a1.metric(
+            "Deporte",
+            safe_value(selected["Deporte"])
+        )
+
+        a2.metric(
+            "Competición",
+            safe_value(selected["Liga"])
+        )
+
+        a3.metric(
+            "Fecha",
+            format_date_display(selected["Fecha"])
+        )
+
+        a4.metric(
+            "Hora",
+            safe_value(selected["Hora"], "--")
+        )
+
+        st.markdown(
+            '<div class="card">',
+            unsafe_allow_html=True
+        )
+
+        st.write(
+            f"**🏠 Local:** "
+            f"{safe_value(selected['Local'])}"
+        )
+
+        st.write(
+            f"**✈️ Visitante:** "
+            f"{safe_value(selected['Visitante'])}"
+        )
+
+        st.write(
+            f"**🏟️ Estadio:** "
+            f"{safe_value(selected['Estadio'])}"
+        )
+
+        st.write(
+            f"**🌎 País:** "
+            f"{safe_value(selected['País'])}"
+        )
+
+        st.write(
+            f"**📍 Ciudad:** "
+            f"{safe_value(selected['Ciudad'])}"
+        )
+
+        st.write(
+            f"**🏆 Temporada:** "
+            f"{safe_value(selected['Temporada'])}"
+        )
+
+        st.write(
+            f"**🔢 Ronda:** "
+            f"{safe_value(selected['Ronda'])}"
+        )
+
+        st.markdown(
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        # ====================================================
+        # MERCADO
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '💰 Mercado de cuotas'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '<div class="card">',
+            unsafe_allow_html=True
+        )
+
+        st.markdown(
+            '<b>🟡 CUOTAS NO CONECTADAS</b>',
+            unsafe_allow_html=True
+        )
+
+        st.write(
+            "TheSportsDB proporciona los datos deportivos "
+            "del evento, pero no un feed documentado de "
+            "bookmakers/cuotas de apuestas."
+        )
+
+        st.write(
+            "Por integridad del sistema, no se mostrará "
+            "ninguna cuota inventada."
+        )
+
+        st.markdown(
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        # ====================================================
+        # PROBABILIDAD IMPLÍCITA
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '📐 Probabilidad implícita'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        st.info(
+            "Pendiente de cuotas reales. "
+            "La probabilidad implícita se calculará "
+            "automáticamente cuando exista una cuota válida."
+        )
+
+        # ====================================================
+        # MODELO
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '🧠 Modelo predictivo'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        m1, m2, m3 = st.columns(3)
+
+        with m1:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>Datos históricos</b>'
+                '<br><br>'
+                '🟡 Pendientes de integrar'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        with m2:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>Probabilidad propia</b>'
+                '<br><br>'
+                '🟡 Modelo pendiente'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        with m3:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>Confianza del modelo</b>'
+                '<br><br>'
+                '🟡 Pendiente'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        # ====================================================
+        # VALUE
+        # ====================================================
+
+        st.markdown(
+            '<div class="section-title">'
+            '📈 Value Betting'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        v1, v2, v3 = st.columns(3)
+
+        with v1:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>Edge</b>'
+                '<br><br>'
+                '🟡 Pendiente'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        with v2:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>EV</b>'
+                '<br><br>'
+                '🟡 Pendiente'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+        with v3:
+
+            st.markdown(
+                '<div class="card">'
+                '<b>Value Score</b>'
+                '<br><br>'
+                '🟡 Pendiente'
+                '</div>',
+                unsafe_allow_html=True
+            )
 
 
 # ============================================================
-# CUOTAS
+# RANKING
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">💰 Mercado de cuotas</div>',
+    '<div class="section-title">'
+    '🏆 Ranking de oportunidades'
+    '</div>',
     unsafe_allow_html=True
 )
-
-odds_df = pd.DataFrame()
-
-if not odds_api_key:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <b>🟡 Cuotas todavía no conectadas</b>
-
-        <br><br>
-
-        Introduce tu API Key de The Odds API
-        en el panel izquierdo.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-elif sport_filter == "Todos":
-
-    st.info(
-        "Selecciona un deporte compatible con The Odds API."
-    )
-
-elif sport_filter not in ODDS_SPORTS:
-
-    st.info(
-        "Este deporte todavía no está conectado "
-        "al módulo de cuotas."
-    )
-
-else:
-
-    sport_options = ODDS_SPORTS[sport_filter]
-
-    selected_odds_sport = st.selectbox(
-        "Competición de cuotas",
-        list(sport_options.keys()),
-        format_func=lambda x: sport_options[x]
-    )
-
-    odds_data, odds_status = get_odds(
-        odds_api_key,
-        selected_odds_sport,
-        odds_region,
-        odds_market
-    )
-
-    if odds_status == "OK":
-
-        odds_df = odds_to_dataframe(
-            odds_data
-        )
-
-        if odds_df.empty:
-
-            st.warning(
-                "La API respondió, pero no devolvió "
-                "cuotas para este mercado."
-            )
-
-        else:
-
-            st.success(
-                f"🟢 {len(odds_df)} cuotas reales recibidas."
-            )
-
-            # =================================================
-            # TARJETAS DE CUOTAS
-            # =================================================
-
-            unique_events = (
-                odds_df["Evento"]
-                .drop_duplicates()
-                .tolist()
-            )
-
-            for event_name in unique_events[:20]:
-
-                event_odds = odds_df[
-                    odds_df["Evento"] == event_name
-                ]
-
-                st.markdown(
-                    f"""
-                    <div class="card">
-
-                    <div class="team">
-                    {event_name}
-                    </div>
-
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-                for _, odd in event_odds.head(12).iterrows():
-
-                    probability = implied_probability(
-                        odd["Cuota"]
-                    )
-
-                    col1, col2, col3, col4 = st.columns(
-                        [4, 1.5, 2, 2]
-                    )
-
-                    with col1:
-
-                        st.write(
-                            f"**{odd['Selección']}**"
-                        )
-
-                    with col2:
-
-                        st.markdown(
-                            f'<div class="odd">'
-                            f'{odd["Cuota"]:.2f}'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
-
-                    with col3:
-
-                        st.write(
-                            f"{probability * 100:.2f}%"
-                        )
-
-                    with col4:
-
-                        st.caption(
-                            odd["Casa"]
-                        )
-
-    elif odds_status == "INVALID_API_KEY":
-
-        st.error(
-            "🔴 La API Key no es válida."
-        )
-
-    elif odds_status == "RATE_LIMIT":
-
-        st.warning(
-            "🟡 Se alcanzó el límite de consultas."
-        )
-
-    else:
-
-        st.error(
-            f"No se pudieron obtener cuotas: {odds_status}"
-        )
-
-
-# ============================================================
-# MOTOR QUANT
-# ============================================================
 
 st.markdown(
-    '<div class="section-title">🧠 Motor Quant</div>',
+    '<div class="card">',
     unsafe_allow_html=True
 )
 
-q1, q2, q3 = st.columns(3)
+st.write(
+    "El ranking se activará cuando el sistema tenga "
+    "simultáneamente:"
+)
 
-with q1:
+st.write(
+    "1. Cuotas reales."
+)
 
-    st.markdown(
-        """
-        <div class="card">
+st.write(
+    "2. Probabilidad propia del modelo."
+)
 
-        <b>Probabilidad implícita</b>
+st.write(
+    "3. Edge y EV calculados."
+)
 
-        <br><br>
+st.write(
+    "No se asignarán puntuaciones artificiales."
+)
 
-        🟢 Disponible con cuotas reales.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with q2:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <b>Probabilidad del modelo</b>
-
-        <br><br>
-
-        🟡 Pendiente de conectar el modelo predictivo.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with q3:
-
-    st.markdown(
-        """
-        <div class="card">
-
-        <b>Edge / EV / Value</b>
-
-        <br><br>
-
-        🟡 Se activarán cuando exista
-        una probabilidad propia.
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+st.markdown(
+    '</div>',
+    unsafe_allow_html=True
+)
 
 
 # ============================================================
@@ -987,25 +987,53 @@ with q3:
 # ============================================================
 
 st.markdown(
-    """
-    <div class="card">
+    '<div class="section-title">'
+    '🔐 Integridad del sistema'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-    <b>🔐 Integridad del sistema</b>
+st.markdown(
+    '<div class="card">',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <b>Reglas del Centro de Mando</b>
 
     <br><br>
 
-    El sistema NO inventa cuotas.
+    🟢 Solo se muestran datos obtenidos de fuentes reales.
+
+    <br><br>
+
+    🔒 El sistema NO inventa cuotas.
+
     <br>
-    El sistema NO inventa probabilidades.
+
+    🔒 El sistema NO inventa probabilidades.
+
     <br>
-    El sistema NO genera Value Score artificial.
+
+    🔒 El sistema NO genera Value Score artificial.
+
+    <br>
+
+    🔒 El sistema NO convierte una estimación manual
+    en una probabilidad de modelo.
+
     <br><br>
 
     Las métricas predictivas aparecerán únicamente
-    cuando conectemos el modelo estadístico real.
-
-    </div>
+    cuando exista una fuente de datos suficiente
+    y un modelo estadístico entrenado.
     """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -1019,38 +1047,66 @@ with st.expander("🏗️ Ver arquitectura del sistema"):
     st.markdown("""
     ### CAPA 1 — Datos deportivos
 
-    TheSportsDB
+    **TheSportsDB**
 
     Eventos → Equipos → Ligas → Fechas → Estadios
+    → resultados → estadísticas disponibles
+
+    ---
 
     ### CAPA 2 — Mercado
 
-    The Odds API
+    **Fuente de cuotas**
 
     Casas → Mercados → Selecciones → Cuotas
 
-    ### CAPA 3 — Modelo
+    Estado actual: 🟡 Pendiente
 
-    Datos históricos → Variables → Probabilidad
+    ---
 
-    ### CAPA 4 — Quant
+    ### CAPA 3 — Datos históricos
 
-    Probabilidad modelo  
-    ↓  
-    Probabilidad implícita  
-    ↓  
-    Edge  
-    ↓  
-    EV  
-    ↓  
-    Value Score  
-    ↓  
+    Resultados históricos → forma → local/visitante
+    → rendimiento → variables
+
+    Estado actual: 🟡 Pendiente
+
+    ---
+
+    ### CAPA 4 — Modelo predictivo
+
+    Variables
+    ↓
+    Modelo estadístico
+    ↓
+    Probabilidad propia
+
+    Estado actual: 🟡 Pendiente
+
+    ---
+
+    ### CAPA 5 — Motor Quant
+
+    Probabilidad propia
+    ↓
+    Probabilidad implícita
+    ↓
+    Edge
+    ↓
+    EV
+    ↓
+    Value Score
+    ↓
     Ranking
 
-    ### CAPA 5 — Dashboard
+    Estado actual: 🟡 Pendiente
 
-    El usuario ve únicamente la información
-    relevante y accionable.
+    ---
+
+    ### CAPA 6 — Dashboard
+
+    El usuario ve únicamente información
+    real, calculada y trazable.
     """)
 
 
@@ -1061,5 +1117,5 @@ with st.expander("🏗️ Ver arquitectura del sistema"):
 st.divider()
 
 st.caption(
-    "Centro de Mando Quant · Sports Data Hub · FASE 5"
+    "Centro de Mando Quant · Sports Data Hub · FASE 6"
 )
