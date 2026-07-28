@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
-import numpy as np
-
 from datetime import datetime, date
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, log_loss
+from sklearn.metrics import accuracy_score
 
 
 # ============================================================
@@ -23,122 +22,113 @@ st.set_page_config(
 
 TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
 
-# Número mínimo de partidos históricos para intentar entrenar
 MIN_TRAINING_ROWS = 15
+
 
 # ============================================================
 # ESTILO
 # ============================================================
 
-st.markdown("""
-<style>
+st.markdown(
+    """
+    <style>
 
-.stApp {
-    background: #0b0f15;
-    color: #f5f7fa;
-}
+    .stApp {
+        background: #0b0f15;
+        color: #f5f7fa;
+    }
 
-section[data-testid="stSidebar"] {
-    background: #151a23;
-}
+    section[data-testid="stSidebar"] {
+        background: #151a23;
+    }
 
-.block-container {
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-    max-width: 1500px;
-}
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1500px;
+    }
 
-.main-title {
-    font-size: 42px;
-    font-weight: 800;
-    margin-bottom: 4px;
-}
+    .main-title {
+        font-size: 42px;
+        font-weight: 800;
+        margin-bottom: 4px;
+    }
 
-.subtitle {
-    color: #9ca3af;
-    font-size: 17px;
-    margin-bottom: 25px;
-}
+    .subtitle {
+        color: #9ca3af;
+        font-size: 17px;
+        margin-bottom: 25px;
+    }
 
-.card {
-    background: #151a23;
-    border: 1px solid #293241;
-    border-radius: 18px;
-    padding: 22px;
-    margin-bottom: 16px;
-}
+    .card {
+        background: #151a23;
+        border: 1px solid #293241;
+        border-radius: 18px;
+        padding: 22px;
+        margin-bottom: 16px;
+    }
 
-.match-card {
-    background: #111720;
-    border: 1px solid #293241;
-    border-radius: 18px;
-    padding: 24px;
-    margin: 12px 0;
-}
+    .match-card {
+        background: #111720;
+        border: 1px solid #293241;
+        border-radius: 18px;
+        padding: 24px;
+        margin: 12px 0;
+    }
 
-.team {
-    font-size: 21px;
-    font-weight: 700;
-}
+    .team {
+        font-size: 21px;
+        font-weight: 700;
+    }
 
-.gray {
-    color: #9ca3af;
-}
+    .gray {
+        color: #9ca3af;
+    }
 
-.green {
-    color: #10b981;
-}
+    .section-title {
+        font-size: 27px;
+        font-weight: 750;
+        margin-top: 25px;
+        margin-bottom: 15px;
+    }
 
-.yellow {
-    color: #f59e0b;
-}
+    .status {
+        padding: 7px 12px;
+        border-radius: 10px;
+        display: inline-block;
+        font-weight: 700;
+        font-size: 13px;
+    }
 
-.red {
-    color: #ef4444;
-}
+    .status-green {
+        background: #063c2d;
+        color: #34d399;
+        border: 1px solid #10b981;
+    }
 
-.section-title {
-    font-size: 27px;
-    font-weight: 750;
-    margin-top: 25px;
-    margin-bottom: 15px;
-}
+    .status-yellow {
+        background: #3b2b08;
+        color: #fbbf24;
+        border: 1px solid #eab308;
+    }
 
-.status {
-    padding: 7px 12px;
-    border-radius: 10px;
-    display: inline-block;
-    font-weight: 700;
-    font-size: 13px;
-}
+    .status-red {
+        background: #3c1010;
+        color: #f87171;
+        border: 1px solid #ef4444;
+    }
 
-.status-green {
-    background: #063c2d;
-    color: #34d399;
-    border: 1px solid #10b981;
-}
+    div[data-testid="stMetric"] {
+        background: #151a23;
+        border: 1px solid #293241;
+        padding: 15px;
+        border-radius: 15px;
+    }
 
-.status-yellow {
-    background: #3b2b08;
-    color: #fbbf24;
-    border: 1px solid #eab308;
-}
-
-.status-red {
-    background: #3c1010;
-    color: #f87171;
-    border: 1px solid #ef4444;
-}
-
-div[data-testid="stMetric"] {
-    background: #151a23;
-    border: 1px solid #293241;
-    padding: 15px;
-    border-radius: 15px;
-}
-
-</style>
-""", unsafe_allow_html=True)
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -168,7 +158,6 @@ def format_date_display(value):
         return "No disponible"
 
     try:
-
         parsed = datetime.strptime(
             str(value),
             "%Y-%m-%d"
@@ -177,7 +166,6 @@ def format_date_display(value):
         return parsed.strftime("%d/%m/%Y")
 
     except Exception:
-
         return str(value)
 
 
@@ -188,7 +176,6 @@ def format_time(event):
     if timestamp:
 
         try:
-
             dt = datetime.fromisoformat(
                 timestamp.replace("Z", "+00:00")
             )
@@ -210,12 +197,13 @@ def normalize_score(value):
 
     try:
         return int(value)
+
     except (TypeError, ValueError):
         return None
 
 
 # ============================================================
-# THE SPORTS DB — EVENTOS DEL DÍA
+# THE SPORTSDb — EVENTOS DEL DÍA
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -238,8 +226,7 @@ def get_events_day(selected_date, sport_filter):
             timeout=15
         )
 
-        if response.status_code != 200:
-            return [], f"HTTP_{response.status_code}"
+        response.raise_for_status()
 
         data = response.json()
 
@@ -382,8 +369,7 @@ def get_team_history(team_id):
             timeout=15
         )
 
-        if response.status_code != 200:
-            return [], f"HTTP_{response.status_code}"
+        response.raise_for_status()
 
         data = response.json()
 
@@ -455,21 +441,24 @@ def history_to_dataframe(events):
 
     df = pd.DataFrame(rows)
 
-    if not df.empty:
+    if df.empty:
+        return df
 
-        df["Fecha"] = pd.to_datetime(
-            df["Fecha"],
-            errors="coerce"
-        )
+    df["Fecha"] = pd.to_datetime(
+        df["Fecha"],
+        errors="coerce"
+    )
 
-        df = df.dropna(
-            subset=["Fecha"]
-        )
+    df = df.dropna(
+        subset=[
+            "Fecha"
+        ]
+    )
 
-        df = df.sort_values(
-            "Fecha",
-            ascending=False
-        )
+    df = df.sort_values(
+        "Fecha",
+        ascending=False
+    )
 
     return df
 
@@ -533,9 +522,6 @@ def calculate_team_form(
     goals_for = 0
     goals_against = 0
 
-    home_matches = 0
-    away_matches = 0
-
     for _, row in relevant.iterrows():
 
         is_home = (
@@ -547,14 +533,10 @@ def calculate_team_form(
             gf = row["GolesLocal"]
             ga = row["GolesVisitante"]
 
-            home_matches += 1
-
         else:
 
             gf = row["GolesVisitante"]
             ga = row["GolesLocal"]
-
-            away_matches += 1
 
         goals_for += gf
         goals_against += ga
@@ -625,40 +607,13 @@ def get_match_target(
 
 
 # ============================================================
-# VARIABLES PRE-PARTIDO
+# FEATURES PRE-PARTIDO
 # ============================================================
 
-def build_pre_match_features(
-    match,
-    home_history,
-    away_history,
-    window=5
+def forms_to_features(
+    home_form,
+    away_form
 ):
-
-    home_name = match["Local"]
-    away_name = match["Visitante"]
-
-    match_date = match["Fecha"]
-
-    home_form = calculate_team_form(
-        home_history,
-        home_name,
-        n=window,
-        before_date=match_date
-    )
-
-    away_form = calculate_team_form(
-        away_history,
-        away_name,
-        n=window,
-        before_date=match_date
-    )
-
-    if (
-        home_form is None
-        or away_form is None
-    ):
-        return None
 
     return {
 
@@ -719,8 +674,63 @@ def build_pre_match_features(
         "dg_diff":
             home_form["DG"]
             - away_form["DG"],
-
     }
+
+
+def build_pre_match_features(
+    match,
+    home_history,
+    away_history,
+    window=5
+):
+
+    home_name = match["Local"]
+    away_name = match["Visitante"]
+
+    match_date = match["Fecha"]
+
+    # Unimos ambos históricos para que cada equipo
+    # pueda ser evaluado correctamente.
+    all_history = pd.concat(
+        [
+            home_history,
+            away_history
+        ],
+        ignore_index=True
+    ).drop_duplicates(
+        subset=["ID"]
+    )
+
+    home_form = calculate_team_form(
+        all_history,
+        home_name,
+        n=window,
+        before_date=match_date
+    )
+
+    away_form = calculate_team_form(
+        all_history,
+        away_name,
+        n=window,
+        before_date=match_date
+    )
+
+    if (
+        home_form is None
+        or away_form is None
+    ):
+        return None
+
+    if (
+        home_form["Partidos"] < window
+        or away_form["Partidos"] < window
+    ):
+        return None
+
+    return forms_to_features(
+        home_form,
+        away_form
+    )
 
 
 # ============================================================
@@ -739,7 +749,6 @@ def build_training_dataset(
     ):
         return pd.DataFrame()
 
-    # Unimos históricos de ambos equipos
     all_history = pd.concat(
         [
             home_history,
@@ -762,15 +771,11 @@ def build_training_dataset(
 
     all_history = all_history.sort_values(
         "Fecha"
-    )
+    ).reset_index(drop=True)
 
     rows = []
 
-    # Construimos observaciones históricas
-    # utilizando solamente información anterior
-    # a cada partido.
-
-    for _, match in all_history.iterrows():
+    for index, match in all_history.iterrows():
 
         home_name = match["Local"]
         away_name = match["Visitante"]
@@ -778,27 +783,26 @@ def build_training_dataset(
         if not home_name or not away_name:
             continue
 
-        # Para evitar leakage:
-        # solo usamos partidos anteriores
-        home_previous = all_history[
-            all_history["Fecha"]
-            < match["Fecha"]
+        # CRÍTICO:
+        # Solo utilizamos partidos anteriores
+        # al partido que estamos intentando modelar.
+        previous_matches = all_history.iloc[
+            :index
         ].copy()
 
-        away_previous = home_previous.copy()
+        if previous_matches.empty:
+            continue
 
         home_form = calculate_team_form(
-            home_previous,
+            previous_matches,
             home_name,
-            n=window,
-            before_date=match["Fecha"]
+            n=window
         )
 
         away_form = calculate_team_form(
-            away_previous,
+            previous_matches,
             away_name,
-            n=window,
-            before_date=match["Fecha"]
+            n=window
         )
 
         if (
@@ -807,7 +811,6 @@ def build_training_dataset(
         ):
             continue
 
-        # Necesitamos una muestra mínima
         if (
             home_form["Partidos"] < window
             or away_form["Partidos"] < window
@@ -822,73 +825,21 @@ def build_training_dataset(
         if target is None:
             continue
 
-        rows.append({
+        features = forms_to_features(
+            home_form,
+            away_form
+        )
 
-            "home_ppp":
-                home_form["PPP"],
+        features["target"] = target
+        features["fecha"] = match["Fecha"]
 
-            "away_ppp":
-                away_form["PPP"],
-
-            "home_gf":
-                home_form["GF"],
-
-            "away_gf":
-                away_form["GF"],
-
-            "home_gc":
-                home_form["GC"],
-
-            "away_gc":
-                away_form["GC"],
-
-            "home_dg":
-                home_form["DG"],
-
-            "away_dg":
-                away_form["DG"],
-
-            "home_wins":
-                home_form["Victorias"],
-
-            "away_wins":
-                away_form["Victorias"],
-
-            "home_losses":
-                home_form["Derrotas"],
-
-            "away_losses":
-                away_form["Derrotas"],
-
-            "ppp_diff":
-                home_form["PPP"]
-                - away_form["PPP"],
-
-            "gf_diff":
-                home_form["GF"]
-                - away_form["GF"],
-
-            "gc_diff":
-                home_form["GC"]
-                - away_form["GC"],
-
-            "dg_diff":
-                home_form["DG"]
-                - away_form["DG"],
-
-            "target":
-                target,
-
-            "fecha":
-                match["Fecha"],
-
-        })
+        rows.append(features)
 
     return pd.DataFrame(rows)
 
 
 # ============================================================
-# ENTRENAMIENTO DEL MODELO
+# FEATURES
 # ============================================================
 
 FEATURE_COLUMNS = [
@@ -911,6 +862,9 @@ FEATURE_COLUMNS = [
     "home_losses",
     "away_losses",
 
+    "home_matches",
+    "away_matches",
+
     "ppp_diff",
     "gf_diff",
     "gc_diff",
@@ -919,26 +873,58 @@ FEATURE_COLUMNS = [
 ]
 
 
+# ============================================================
+# MODELO
+# ============================================================
+
 def train_model(training_df):
 
     if training_df.empty:
-        return None, None
+        return None, "NO_DATA"
 
     if len(training_df) < MIN_TRAINING_ROWS:
         return None, "INSUFFICIENT_DATA"
 
-    X = training_df[
+    training_df = training_df.sort_values(
+        "fecha"
+    ).reset_index(drop=True)
+
+    if training_df["target"].nunique() < 2:
+        return None, "ONE_CLASS_ONLY"
+
+    split_index = int(
+        len(training_df) * 0.80
+    )
+
+    if split_index < 10:
+        return None, "SMALL_TRAINING_SET"
+
+    train = training_df.iloc[
+        :split_index
+    ].copy()
+
+    validation = training_df.iloc[
+        split_index:
+    ].copy()
+
+    if validation.empty:
+        return None, "INVALID_VALIDATION"
+
+    if train["target"].nunique() < 2:
+        return None, "INVALID_TRAIN_CLASSES"
+
+    X_train = train[
         FEATURE_COLUMNS
     ]
 
-    y = training_df["target"]
+    y_train = train["target"]
 
-    # Debemos tener al menos dos resultados
-    # diferentes para entrenar clasificación.
-    if y.nunique() < 2:
-        return None, "ONE_CLASS_ONLY"
+    X_valid = validation[
+        FEATURE_COLUMNS
+    ]
 
-    # Modelo reproducible y sencillo.
+    y_valid = validation["target"]
+
     model = Pipeline([
         (
             "scaler",
@@ -952,47 +938,6 @@ def train_model(training_df):
             )
         )
     ])
-
-    # División temporal:
-    # primeras observaciones -> entrenamiento
-    # últimas observaciones -> validación
-
-    training_df = training_df.sort_values(
-        "fecha"
-    )
-
-    split_index = int(
-        len(training_df) * 0.80
-    )
-
-    if split_index < 10:
-        return None, "SMALL_TRAINING_SET"
-
-    train = training_df.iloc[
-        :split_index
-    ]
-
-    validation = training_df.iloc[
-        split_index:
-    ]
-
-    if (
-        train["target"].nunique() < 2
-        or validation.empty
-    ):
-        return None, "INVALID_VALIDATION"
-
-    X_train = train[
-        FEATURE_COLUMNS
-    ]
-
-    y_train = train["target"]
-
-    X_valid = validation[
-        FEATURE_COLUMNS
-    ]
-
-    y_valid = validation["target"]
 
     model.fit(
         X_train,
@@ -1009,21 +954,30 @@ def train_model(training_df):
     )
 
     validation_info = {
-        "train_rows": len(train),
-        "validation_rows": len(validation),
-        "accuracy": accuracy,
-        "classes": list(
-            model.named_steps[
-                "classifier"
-            ].classes_
-        )
+
+        "train_rows":
+            len(train),
+
+        "validation_rows":
+            len(validation),
+
+        "accuracy":
+            accuracy,
+
+        "classes":
+            list(
+                model.named_steps[
+                    "classifier"
+                ].classes_
+            ),
+
     }
 
     return model, validation_info
 
 
 # ============================================================
-# PROBABILIDAD DEL PARTIDO ACTUAL
+# PREDICCIÓN
 # ============================================================
 
 def predict_match(
@@ -1054,10 +1008,20 @@ def predict_match(
     ):
         result[cls] = float(prob)
 
-    # Aseguramos las tres categorías
-    result.setdefault("H", 0.0)
-    result.setdefault("D", 0.0)
-    result.setdefault("A", 0.0)
+    result.setdefault(
+        "H",
+        0.0
+    )
+
+    result.setdefault(
+        "D",
+        0.0
+    )
+
+    result.setdefault(
+        "A",
+        0.0
+    )
 
     return result
 
@@ -1121,8 +1085,8 @@ with st.sidebar:
     )
 
     st.caption(
-        "Las variables pre-partido utilizan "
-        "únicamente información anterior al evento."
+        "El modelo utiliza únicamente información "
+        "anterior al partido analizado."
     )
 
     st.divider()
@@ -1147,17 +1111,21 @@ with st.sidebar:
 # ============================================================
 
 st.markdown(
-    '<div class="main-title">'
-    '📊 Centro de Mando Quant'
-    '</div>',
+    """
+    <div class="main-title">
+        📊 Centro de Mando Quant
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<div class="subtitle">'
-    'Sports Data Hub · Datos reales · '
-    'Histórico · Modelo Predictivo · Motor Quant'
-    '</div>',
+    """
+    <div class="subtitle">
+        Sports Data Hub · Datos reales · Histórico ·
+        Modelo Predictivo · Motor Quant
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -1185,27 +1153,33 @@ status1, status2, status3 = st.columns(3)
 with status1:
 
     st.markdown(
-        '<div class="status status-green">'
-        '🟢 DATOS DEPORTIVOS'
-        '</div>',
+        """
+        <div class="status status-green">
+            🟢 DATOS DEPORTIVOS
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
 with status2:
 
     st.markdown(
-        '<div class="status status-green">'
-        '🟢 HISTÓRICO DISPONIBLE'
-        '</div>',
+        """
+        <div class="status status-green">
+            🟢 HISTÓRICO
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
 with status3:
 
     st.markdown(
-        '<div class="status status-yellow">'
-        '🟡 MODELO EN VALIDACIÓN'
-        '</div>',
+        """
+        <div class="status status-yellow">
+            🟡 MODELO EN VALIDACIÓN
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
@@ -1219,8 +1193,7 @@ if event_status.startswith(
 ):
 
     st.error(
-        "No fue posible conectar "
-        "con TheSportsDB."
+        "No fue posible conectar con TheSportsDB."
     )
 
 elif event_status == "NO_EVENTS":
@@ -1243,9 +1216,11 @@ elif event_status != "OK":
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">'
-    '📈 Resumen'
-    '</div>',
+    """
+    <div class="section-title">
+        📈 Resumen
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -1259,19 +1234,22 @@ c1.metric(
 c2.metric(
     "Deportes",
     df_events["Deporte"].nunique()
-    if not df_events.empty else 0
+    if not df_events.empty
+    else 0
 )
 
 c3.metric(
     "Ligas",
     df_events["Liga"].nunique()
-    if not df_events.empty else 0
+    if not df_events.empty
+    else 0
 )
 
 c4.metric(
     "Países",
     df_events["País"].nunique()
-    if not df_events.empty else 0
+    if not df_events.empty
+    else 0
 )
 
 
@@ -1280,9 +1258,11 @@ c4.metric(
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">'
-    '🔎 Filtrar partidos'
-    '</div>',
+    """
+    <div class="section-title">
+        🔎 Filtrar partidos
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -1329,15 +1309,13 @@ if not df_events.empty:
     if selected_league != "Todas":
 
         filtered = filtered[
-            filtered["Liga"]
-            == selected_league
+            filtered["Liga"] == selected_league
         ]
 
     if selected_country != "Todos":
 
         filtered = filtered[
-            filtered["País"]
-            == selected_country
+            filtered["País"] == selected_country
         ]
 
 else:
@@ -1350,16 +1328,18 @@ else:
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">'
-    '🏟️ Partidos y eventos'
-    '</div>',
+    """
+    <div class="section-title">
+        🏟️ Partidos y eventos
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
 if filtered.empty:
 
     st.info(
-        "No hay eventos deportivos."
+        "No hay eventos deportivos para mostrar."
     )
 
 else:
@@ -1374,25 +1354,34 @@ else:
         )
 
         st.markdown(
-            f'<div class="gray">'
-            f'{safe_value(row["Liga"], "Competición")}'
-            f'</div>',
+            f"""
+            <div class="gray">
+                {safe_value(row["Liga"], "Competición")}
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
         st.markdown(
-            f'<div class="team">'
-            f'{safe_value(row["Evento"], "Evento deportivo")}'
-            f'</div>',
+            f"""
+            <div class="team">
+                {safe_value(
+                    row["Evento"],
+                    "Evento deportivo"
+                )}
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
         st.markdown(
-            f'<div class="gray">'
-            f'📅 {format_date_display(row["Fecha"])}'
-            f' &nbsp;&nbsp; '
-            f'⏰ {safe_value(row["Hora"], "--")}'
-            f'</div>',
+            f"""
+            <div class="gray">
+                📅 {format_date_display(row["Fecha"])}
+                &nbsp;&nbsp;
+                ⏰ {safe_value(row["Hora"], "--")}
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
@@ -1419,9 +1408,11 @@ else:
         )
 
         st.markdown(
-            f'<div class="gray">'
-            f'📍 {location or "Ubicación no disponible"}'
-            f'</div>',
+            f"""
+            <div class="gray">
+                📍 {location or "Ubicación no disponible"}
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
@@ -1453,8 +1444,7 @@ selected_event_id = st.session_state.get(
 if selected_event_id is not None:
 
     selected_rows = df_events[
-        df_events["ID"]
-        == selected_event_id
+        df_events["ID"] == selected_event_id
     ]
 
     if not selected_rows.empty:
@@ -1464,23 +1454,27 @@ if selected_event_id is not None:
         st.divider()
 
         st.markdown(
-            '<div class="section-title">'
-            '🎯 Análisis del evento'
-            '</div>',
+            """
+            <div class="section-title">
+                🎯 Análisis del evento
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
         st.markdown(
-            f'<div class="card">'
-            f'<div class="team">'
-            f'{safe_value(selected["Evento"])}'
-            f'</div>'
-            f'</div>',
+            f"""
+            <div class="card">
+                <div class="team">
+                    {safe_value(selected["Evento"])}
+                </div>
+            </div>
+            """,
             unsafe_allow_html=True
         )
 
         # ====================================================
-        # COMPATIBILIDAD CON MODELO 1X2
+        # COMPATIBILIDAD 1X2
         # ====================================================
 
         model_compatible = (
@@ -1493,29 +1487,28 @@ if selected_event_id is not None:
         if not model_compatible:
 
             st.warning(
-                "⚠️ Este evento no tiene estructura "
+                "Este evento no tiene estructura "
                 "Local vs Visitante compatible con "
-                "el modelo 1X2. Se mostrará como "
-                "evento deportivo, pero no se fabricará "
-                "una probabilidad predictiva."
+                "el modelo 1X2."
             )
 
             st.info(
-                "Esto es esperado en eventos como "
-                "atletismo individual, donde no existen "
-                "dos equipos enfrentados."
+                "El evento se muestra como dato deportivo, "
+                "pero no se generará una predicción 1X2."
             )
 
         else:
 
             # =================================================
-            # DATOS DEL EVENTO
+            # DATOS
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '📋 Datos del evento'
-                '</div>',
+                """
+                <div class="section-title">
+                    📋 Datos del evento
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -1523,16 +1516,12 @@ if selected_event_id is not None:
 
             a1.metric(
                 "Deporte",
-                safe_value(
-                    selected["Deporte"]
-                )
+                safe_value(selected["Deporte"])
             )
 
             a2.metric(
                 "Competición",
-                safe_value(
-                    selected["Liga"]
-                )
+                safe_value(selected["Liga"])
             )
 
             a3.metric(
@@ -1555,9 +1544,11 @@ if selected_event_id is not None:
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '📚 Histórico de los equipos'
-                '</div>',
+                """
+                <div class="section-title">
+                    📚 Histórico de los equipos
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -1573,16 +1564,12 @@ if selected_event_id is not None:
                 )
             )
 
-            home_history = (
-                history_to_dataframe(
-                    home_history_raw
-                )
+            home_history = history_to_dataframe(
+                home_history_raw
             )
 
-            away_history = (
-                history_to_dataframe(
-                    away_history_raw
-                )
+            away_history = history_to_dataframe(
+                away_history_raw
             )
 
             h1, h2 = st.columns(2)
@@ -1593,7 +1580,7 @@ if selected_event_id is not None:
 
                     st.success(
                         f"Local: {len(home_history)} "
-                        f"registros históricos"
+                        f"registros"
                     )
 
                 else:
@@ -1608,7 +1595,7 @@ if selected_event_id is not None:
 
                     st.success(
                         f"Visitante: {len(away_history)} "
-                        f"registros históricos"
+                        f"registros"
                     )
 
                 else:
@@ -1618,18 +1605,34 @@ if selected_event_id is not None:
                     )
 
             # =================================================
-            # FORMA ACTUAL
+            # FORMA
             # =================================================
 
             home_form = calculate_team_form(
-                home_history,
+                pd.concat(
+                    [
+                        home_history,
+                        away_history
+                    ],
+                    ignore_index=True
+                ).drop_duplicates(
+                    subset=["ID"]
+                ),
                 selected["Local"],
                 history_window,
                 before_date=selected["Fecha"]
             )
 
             away_form = calculate_team_form(
-                away_history,
+                pd.concat(
+                    [
+                        home_history,
+                        away_history
+                    ],
+                    ignore_index=True
+                ).drop_duplicates(
+                    subset=["ID"]
+                ),
                 selected["Visitante"],
                 history_window,
                 before_date=selected["Fecha"]
@@ -1641,9 +1644,11 @@ if selected_event_id is not None:
             ):
 
                 st.markdown(
-                    '<div class="section-title">'
-                    '📊 Forma reciente'
-                    '</div>',
+                    """
+                    <div class="section-title">
+                        📊 Forma reciente
+                    </div>
+                    """,
                     unsafe_allow_html=True
                 )
 
@@ -1770,13 +1775,15 @@ if selected_event_id is not None:
                 )
 
             # =================================================
-            # DATASET DE ENTRENAMIENTO
+            # DATASET
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '🧪 Dataset histórico de entrenamiento'
-                '</div>',
+                """
+                <div class="section-title">
+                    🧪 Dataset histórico
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -1789,21 +1796,18 @@ if selected_event_id is not None:
             if training_df.empty:
 
                 st.warning(
-                    "No se pudo construir un dataset "
-                    "histórico suficiente para entrenar."
+                    "No existe suficiente información "
+                    "histórica para construir el dataset."
                 )
 
                 model = None
-                model_status = (
-                    "INSUFFICIENT_DATA"
-                )
+                model_status = "INSUFFICIENT_DATA"
 
             else:
 
                 st.success(
                     f"Dataset construido: "
-                    f"{len(training_df)} "
-                    f"observaciones históricas."
+                    f"{len(training_df)} observaciones."
                 )
 
                 target_counts = (
@@ -1816,26 +1820,17 @@ if selected_event_id is not None:
 
                 d1.metric(
                     "Local",
-                    target_counts.get(
-                        "H",
-                        0
-                    )
+                    target_counts.get("H", 0)
                 )
 
                 d2.metric(
                     "Empate",
-                    target_counts.get(
-                        "D",
-                        0
-                    )
+                    target_counts.get("D", 0)
                 )
 
                 d3.metric(
                     "Visitante",
-                    target_counts.get(
-                        "A",
-                        0
-                    )
+                    target_counts.get("A", 0)
                 )
 
                 with st.expander(
@@ -1848,14 +1843,8 @@ if selected_event_id is not None:
                         hide_index=True
                     )
 
-                # =============================================
-                # ENTRENAR
-                # =============================================
-
-                model, model_status = (
-                    train_model(
-                        training_df
-                    )
+                model, model_status = train_model(
+                    training_df
                 )
 
             # =================================================
@@ -1863,17 +1852,17 @@ if selected_event_id is not None:
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '🧠 Modelo predictivo'
-                '</div>',
+                """
+                <div class="section-title">
+                    🧠 Modelo predictivo
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
             if model is None:
 
-                if model_status == (
-                    "INSUFFICIENT_DATA"
-                ):
+                if model_status == "INSUFFICIENT_DATA":
 
                     st.warning(
                         "🟡 Modelo bloqueado: "
@@ -1881,14 +1870,20 @@ if selected_event_id is not None:
                         "históricas válidas."
                     )
 
-                elif model_status == (
-                    "ONE_CLASS_ONLY"
-                ):
+                elif model_status == "ONE_CLASS_ONLY":
 
                     st.warning(
                         "🟡 Modelo bloqueado: "
                         "el histórico contiene un único "
                         "tipo de resultado."
+                    )
+
+                elif model_status == "INVALID_TRAIN_CLASSES":
+
+                    st.warning(
+                        "🟡 Modelo bloqueado: "
+                        "la muestra de entrenamiento "
+                        "no contiene suficientes clases."
                     )
 
                 else:
@@ -1909,16 +1904,12 @@ if selected_event_id is not None:
 
                 v1.metric(
                     "Entrenamiento",
-                    model_status[
-                        "train_rows"
-                    ]
+                    model_status["train_rows"]
                 )
 
                 v2.metric(
                     "Validación",
-                    model_status[
-                        "validation_rows"
-                    ]
+                    model_status["validation_rows"]
                 )
 
                 v3.metric(
@@ -1927,7 +1918,7 @@ if selected_event_id is not None:
                 )
 
                 # =============================================
-                # PREDICCIÓN ACTUAL
+                # PREDICCIÓN
                 # =============================================
 
                 current_features = (
@@ -1949,9 +1940,11 @@ if selected_event_id is not None:
                     if probabilities:
 
                         st.markdown(
-                            '<div class="section-title">'
-                            '🎯 Probabilidad propia del modelo'
-                            '</div>',
+                            """
+                            <div class="section-title">
+                                🎯 Probabilidad propia del modelo
+                            </div>
+                            """,
                             unsafe_allow_html=True
                         )
 
@@ -1991,10 +1984,10 @@ if selected_event_id is not None:
                         )
 
                         st.caption(
-                            "Esta es una probabilidad "
-                            "producida por el modelo; "
-                            "no es una cuota ni una "
-                            "probabilidad implícita."
+                            "Probabilidad generada por el "
+                            "modelo estadístico. No representa "
+                            "una cuota ni una probabilidad "
+                            "implícita de mercado."
                         )
 
                     else:
@@ -2007,8 +2000,9 @@ if selected_event_id is not None:
                 else:
 
                     st.warning(
-                        "No fue posible construir "
-                        "las variables pre-partido."
+                        "No existe suficiente información "
+                        "pre-partido para generar una "
+                        "predicción."
                     )
 
             # =================================================
@@ -2016,26 +2010,29 @@ if selected_event_id is not None:
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '💰 Mercado'
-                '</div>',
+                """
+                <div class="section-title">
+                    💰 Mercado
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
             st.info(
-                "🟡 Cuotas no conectadas. "
-                "El sistema no inventará cuotas "
-                "ni probabilidades implícitas."
+                "🟡 Mercado pendiente de conexión. "
+                "El sistema no inventará cuotas."
             )
 
             # =================================================
-            # VALUE
+            # VALUE BETTING
             # =================================================
 
             st.markdown(
-                '<div class="section-title">'
-                '📈 Value Betting'
-                '</div>',
+                """
+                <div class="section-title">
+                    📈 Value Betting
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -2057,10 +2054,8 @@ if selected_event_id is not None:
             )
 
             st.caption(
-                "Edge, EV y Value Score solo se "
-                "activarán cuando exista una cuota "
-                "real y trazable para comparar "
-                "contra la probabilidad propia."
+                "Edge, EV y Value Score solo se activarán "
+                "cuando exista una cuota real y trazable."
             )
 
 
@@ -2071,9 +2066,11 @@ if selected_event_id is not None:
 st.divider()
 
 st.markdown(
-    '<div class="section-title">'
-    '🏆 Ranking de oportunidades'
-    '</div>',
+    """
+    <div class="section-title">
+        🏆 Ranking de oportunidades
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -2087,12 +2084,11 @@ st.write(
 )
 
 st.write(
-    "El ranking no asignará puntuaciones "
-    "artificiales."
+    "El sistema no asignará puntuaciones artificiales."
 )
 
 st.write(
-    "Para activarlo se necesitará:"
+    "Para activar el ranking se necesitará:"
 )
 
 st.write(
@@ -2126,19 +2122,18 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">'
-    '🔐 Integridad del sistema'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="card">',
+    """
+    <div class="section-title">
+        🔐 Integridad del sistema
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
 st.markdown(
     """
+    <div class="card">
+
     <b>Reglas del Centro de Mando</b>
 
     <br><br>
@@ -2177,11 +2172,6 @@ st.markdown(
 
     <br>
 
-    🔒 No se utiliza una estimación manual como
-    probabilidad de modelo.
-
-    <br>
-
     🔒 No se utiliza información futura para
     construir variables históricas.
 
@@ -2190,12 +2180,9 @@ st.markdown(
     El sistema bloquea automáticamente cualquier
     cálculo predictivo cuando los datos no son
     suficientes o no son compatibles.
-    """,
-    unsafe_allow_html=True
-)
 
-st.markdown(
-    '</div>',
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -2208,111 +2195,113 @@ with st.expander(
     "🏗️ Ver arquitectura del sistema"
 ):
 
-    st.markdown("""
-    ### CAPA 1 — Datos deportivos
+    st.markdown(
+        """
+        ### CAPA 1 — Datos deportivos
 
-    TheSportsDB
+        TheSportsDB
 
-    Eventos → Equipos → Ligas → Fechas
+        Eventos → Equipos → Ligas → Fechas
 
-    🟢 Activa
+        🟢 Activa
 
-    ---
+        ---
 
-    ### CAPA 2 — Histórico
+        ### CAPA 2 — Histórico
 
-    Partidos anteriores → resultados
+        Partidos anteriores → resultados
 
-    🟢 Activa
+        🟢 Activa
 
-    ---
+        ---
 
-    ### CAPA 3 — Feature Engineering
+        ### CAPA 3 — Feature Engineering
 
-    Histórico anterior al partido
-    ↓
-    Forma reciente
-    ↓
-    Goles
-    ↓
-    Puntos
-    ↓
-    Victorias
-    ↓
-    Derrotas
-    ↓
-    Diferencias
+        Histórico anterior al partido
+        ↓
+        Forma reciente
+        ↓
+        Goles
+        ↓
+        Puntos
+        ↓
+        Victorias
+        ↓
+        Derrotas
+        ↓
+        Diferencias
 
-    🟢 Activa
+        🟢 Activa
 
-    ---
+        ---
 
-    ### CAPA 4 — Dataset de entrenamiento
+        ### CAPA 4 — Dataset de entrenamiento
 
-    Variables pre-partido
-    +
-    Resultado real
+        Variables pre-partido
+        +
+        Resultado real
 
-    🟢 Activa
+        🟢 Activa
 
-    ---
+        ---
 
-    ### CAPA 5 — Modelo predictivo
+        ### CAPA 5 — Modelo predictivo
 
-    Dataset histórico
-    ↓
-    Regresión logística
-    ↓
-    Validación temporal
-    ↓
-    Probabilidades
+        Dataset histórico
+        ↓
+        Regresión logística
+        ↓
+        Validación temporal
+        ↓
+        Probabilidades
 
-    🟢 Activa / Validada
+        🟢 Activa
 
-    ---
+        ---
 
-    ### CAPA 6 — Mercado
+        ### CAPA 6 — Mercado
 
-    Cuotas reales
-    ↓
-    Probabilidad implícita
+        Cuotas reales
+        ↓
+        Probabilidad implícita
 
-    🟡 Pendiente
+        🟡 Pendiente
 
-    ---
+        ---
 
-    ### CAPA 7 — Motor Quant
+        ### CAPA 7 — Motor Quant
 
-    Probabilidad propia
-    +
-    Probabilidad implícita
-    ↓
-    Edge
-    ↓
-    EV
-    ↓
-    Value Score
-    ↓
-    Ranking
+        Probabilidad propia
+        +
+        Probabilidad implícita
+        ↓
+        Edge
+        ↓
+        EV
+        ↓
+        Value Score
+        ↓
+        Ranking
 
-    🟡 Pendiente
+        🟡 Pendiente
 
-    ---
+        ---
 
-    ### CAPA 8 — Dashboard
+        ### CAPA 8 — Dashboard
 
-    Datos
-    +
-    Histórico
-    +
-    Modelo
-    +
-    Mercado
-    +
-    Motor Quant
+        Datos
+        +
+        Histórico
+        +
+        Modelo
+        +
+        Mercado
+        +
+        Motor Quant
 
-    🟡 En construcción
-    """)
+        🟡 En construcción
+        """
+    )
 
 
 # ============================================================
