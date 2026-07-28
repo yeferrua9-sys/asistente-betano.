@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import requests
-import math
 import re
 import unicodedata
 from datetime import datetime, date
@@ -24,23 +23,9 @@ st.set_page_config(
 )
 
 TSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
+ODDS_API_BASE_URL = "https://api.odds-api.io/v3"
 
 MIN_TRAINING_ROWS = 15
-
-ODDS_API_BASE_URL = "https://odds-api.io/api/v3"
-
-DEFAULT_BOOKMAKERS = [
-    "Bet365",
-    "Unibet",
-]
-
-DEFAULT_REGIONS = [
-    "us",
-    "uk",
-    "eu",
-]
-
-DEFAULT_MARKET = "h2h"
 
 
 # ============================================================
@@ -175,27 +160,26 @@ def normalize_text(value):
     if value is None:
         return ""
 
-    value = str(value).lower().strip()
+    text = str(value).strip().lower()
 
-    value = unicodedata.normalize(
+    text = unicodedata.normalize(
         "NFKD",
-        value
-    ).encode(
-        "ascii",
-        "ignore"
-    ).decode(
-        "ascii"
+        text
     )
 
-    value = re.sub(
+    text = "".join(
+        char
+        for char in text
+        if not unicodedata.combining(char)
+    )
+
+    text = re.sub(
         r"[^a-z0-9]+",
         " ",
-        value
+        text
     )
 
-    return " ".join(
-        value.split()
-    )
+    return " ".join(text.split())
 
 
 def team_names_match(name_a, name_b):
@@ -228,8 +212,8 @@ def team_names_match(name_a, name_b):
     )
 
     return (
-        overlap >= 1
-        and overlap / minimum >= 0.5
+        minimum >= 2
+        and overlap >= minimum
     )
 
 
@@ -297,11 +281,110 @@ def normalize_score(value):
         TypeError,
         ValueError
     ):
+
         return None
 
 
+def decimal_to_probability(odds):
+
+    try:
+
+        odds = float(odds)
+
+        if odds <= 1:
+            return None
+
+        return 1 / odds
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        return None
+
+
+def calculate_edge(
+    model_probability,
+    market_probability
+):
+
+    if (
+        model_probability is None
+        or market_probability is None
+    ):
+        return None
+
+    return (
+        model_probability
+        - market_probability
+    )
+
+
+def calculate_ev(
+    model_probability,
+    decimal_odds
+):
+
+    if (
+        model_probability is None
+        or decimal_odds is None
+    ):
+        return None
+
+    try:
+
+        odds = float(decimal_odds)
+
+        if odds <= 1:
+            return None
+
+        return (
+            model_probability * odds
+        ) - 1
+
+    except (
+        TypeError,
+        ValueError
+    ):
+
+        return None
+
+
+def calculate_value_score(
+    edge,
+    ev
+):
+
+    if edge is None or ev is None:
+        return None
+
+    return (
+        max(edge, 0) * 100
+        + max(ev, 0) * 100
+    )
+
+
+def outcome_label(outcome):
+
+    labels = {
+
+        "H": "Local",
+
+        "D": "Empate",
+
+        "A": "Visitante",
+
+    }
+
+    return labels.get(
+        outcome,
+        outcome
+    )
+
+
 # ============================================================
-# THE SPORTSDb — EVENTOS
+# THE SPORTSDb — EVENTOS DEL DÍA
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -334,12 +417,12 @@ def get_events_day(
 
         data = response.json()
 
-        events = (
-            data.get("events")
-            or []
-        )
+        events = data.get(
+            "events"
+        ) or []
 
         if not events:
+
             return [], "NO_EVENTS"
 
         return events, "OK"
@@ -389,7 +472,9 @@ def events_to_dataframe(events):
         rows.append({
 
             "ID":
-                event.get("idEvent"),
+                event.get(
+                    "idEvent"
+                ),
 
             "Deporte":
                 event.get(
@@ -486,13 +571,14 @@ def events_to_dataframe(events):
 
 
 # ============================================================
-# HISTÓRICO
+# HISTÓRICO DE EQUIPO
 # ============================================================
 
 @st.cache_data(ttl=3600)
 def get_team_history(team_id):
 
     if not team_id:
+
         return [], "NO_TEAM_ID"
 
     url = (
@@ -515,12 +601,12 @@ def get_team_history(team_id):
 
         data = response.json()
 
-        events = (
-            data.get("results")
-            or []
-        )
+        events = data.get(
+            "results"
+        ) or []
 
         if not events:
+
             return [], "NO_HISTORY"
 
         return events, "OK"
@@ -628,7 +714,7 @@ def history_to_dataframe(events):
 
 
 # ============================================================
-# FORMA
+# FORMA DEL EQUIPO
 # ============================================================
 
 def calculate_team_form(
@@ -723,9 +809,7 @@ def calculate_team_form(
 
             losses += 1
 
-    matches = len(
-        relevant
-    )
+    matches = len(relevant)
 
     return {
 
@@ -763,7 +847,7 @@ def calculate_team_form(
 
 
 # ============================================================
-# TARGET
+# RESULTADO DEL PARTIDO
 # ============================================================
 
 def get_match_target(
@@ -787,7 +871,7 @@ def get_match_target(
 
 
 # ============================================================
-# FEATURES
+# FEATURES PRE-PARTIDO
 # ============================================================
 
 def forms_to_features(
@@ -865,17 +949,10 @@ def build_pre_match_features(
     window=5
 ):
 
-    home_name = match[
-        "Local"
-    ]
+    home_name = match["Local"]
+    away_name = match["Visitante"]
 
-    away_name = match[
-        "Visitante"
-    ]
-
-    match_date = match[
-        "Fecha"
-    ]
+    match_date = match["Fecha"]
 
     all_history = pd.concat(
         [
@@ -910,8 +987,7 @@ def build_pre_match_features(
     if (
         home_form["Partidos"]
         < window
-        or
-        away_form["Partidos"]
+        or away_form["Partidos"]
         < window
     ):
         return None
@@ -923,7 +999,7 @@ def build_pre_match_features(
 
 
 # ============================================================
-# DATASET
+# DATASET DE ENTRENAMIENTO
 # ============================================================
 
 def build_training_dataset(
@@ -970,13 +1046,8 @@ def build_training_dataset(
 
     for index, match in all_history.iterrows():
 
-        home_name = match[
-            "Local"
-        ]
-
-        away_name = match[
-            "Visitante"
-        ]
+        home_name = match["Local"]
+        away_name = match["Visitante"]
 
         if (
             not home_name
@@ -1013,8 +1084,7 @@ def build_training_dataset(
         if (
             home_form["Partidos"]
             < window
-            or
-            away_form["Partidos"]
+            or away_form["Partidos"]
             < window
         ):
             continue
@@ -1033,19 +1103,16 @@ def build_training_dataset(
         )
 
         features["target"] = target
+        features["fecha"] = match["Fecha"]
 
-        features["fecha"] = (
-            match["Fecha"]
-        )
+        rows.append(features)
 
-        rows.append(
-            features
-        )
+    return pd.DataFrame(rows)
 
-    return pd.DataFrame(
-        rows
-    )
 
+# ============================================================
+# FEATURES
+# ============================================================
 
 FEATURE_COLUMNS = [
 
@@ -1082,20 +1149,13 @@ FEATURE_COLUMNS = [
 # MODELO
 # ============================================================
 
-def train_model(
-    training_df
-):
+def train_model(training_df):
 
     if training_df.empty:
         return None, "NO_DATA"
 
-    if (
-        len(training_df)
-        < MIN_TRAINING_ROWS
-    ):
-        return None, (
-            "INSUFFICIENT_DATA"
-        )
+    if len(training_df) < MIN_TRAINING_ROWS:
+        return None, "INSUFFICIENT_DATA"
 
     training_df = (
         training_df
@@ -1103,24 +1163,15 @@ def train_model(
         .reset_index(drop=True)
     )
 
-    if (
-        training_df["target"]
-        .nunique()
-        < 2
-    ):
-        return None, (
-            "ONE_CLASS_ONLY"
-        )
+    if training_df["target"].nunique() < 2:
+        return None, "ONE_CLASS_ONLY"
 
     split_index = int(
-        len(training_df)
-        * 0.80
+        len(training_df) * 0.80
     )
 
     if split_index < 10:
-        return None, (
-            "SMALL_TRAINING_SET"
-        )
+        return None, "SMALL_TRAINING_SET"
 
     train = training_df.iloc[
         :split_index
@@ -1131,34 +1182,22 @@ def train_model(
     ].copy()
 
     if validation.empty:
-        return None, (
-            "INVALID_VALIDATION"
-        )
+        return None, "INVALID_VALIDATION"
 
-    if (
-        train["target"]
-        .nunique()
-        < 2
-    ):
-        return None, (
-            "INVALID_TRAIN_CLASSES"
-        )
+    if train["target"].nunique() < 2:
+        return None, "INVALID_TRAIN_CLASSES"
 
     X_train = train[
         FEATURE_COLUMNS
     ]
 
-    y_train = train[
-        "target"
-    ]
+    y_train = train["target"]
 
     X_valid = validation[
         FEATURE_COLUMNS
     ]
 
-    y_valid = validation[
-        "target"
-    ]
+    y_valid = validation["target"]
 
     model = Pipeline([
         (
@@ -1201,17 +1240,16 @@ def train_model(
 
         "classes":
             list(
-                model.named_steps[
+                model
+                .named_steps[
                     "classifier"
-                ].classes_
+                ]
+                .classes_
             ),
 
     }
 
-    return (
-        model,
-        validation_info
-    )
+    return model, validation_info
 
 
 # ============================================================
@@ -1251,9 +1289,7 @@ def predict_match(
         probabilities
     ):
 
-        result[cls] = float(
-            prob
-        )
+        result[cls] = float(prob)
 
     result.setdefault(
         "H",
@@ -1277,898 +1313,594 @@ def predict_match(
 # ODDS-API.IO
 # ============================================================
 
-def extract_decimal_odds(value):
-
-    try:
-
-        value = float(value)
-
-        if (
-            math.isfinite(value)
-            and value > 1.0
-        ):
-            return value
-
-    except (
-        TypeError,
-        ValueError
-    ):
-        pass
-
-    return None
-
-
-def extract_bookmaker_name(
-    bookmaker
-):
-
-    if isinstance(
-        bookmaker,
-        str
-    ):
-        return bookmaker
-
-    if not isinstance(
-        bookmaker,
-        dict
-    ):
-        return "Unknown"
-
-    for key in [
-        "name",
-        "title",
-        "bookmaker",
-        "bookmaker_name",
-    ]:
-
-        if bookmaker.get(key):
-            return str(
-                bookmaker[key]
-            )
-
-    return "Unknown"
-
-
-def extract_outcome_name(
-    outcome
-):
-
-    if isinstance(
-        outcome,
-        str
-    ):
-        return outcome
-
-    if not isinstance(
-        outcome,
-        dict
-    ):
-        return ""
-
-    for key in [
-        "name",
-        "label",
-        "outcome",
-        "team",
-        "participant",
-    ]:
-
-        if outcome.get(key):
-            return str(
-                outcome[key]
-            )
-
-    return ""
-
-
-def extract_outcome_price(
-    outcome
-):
-
-    if not isinstance(
-        outcome,
-        dict
-    ):
-        return None
-
-    for key in [
-        "price",
-        "odds",
-        "decimal",
-        "value",
-    ]:
-
-        value = extract_decimal_odds(
-            outcome.get(key)
-        )
-
-        if value is not None:
-            return value
-
-    return None
-
-
-def flatten_odds_response(
-    data
-):
-
-    if isinstance(
-        data,
-        list
-    ):
-        return data
-
-    if not isinstance(
-        data,
-        dict
-    ):
-        return []
-
-    for key in [
-        "data",
-        "events",
-        "matches",
-        "odds",
-        "fixtures",
-        "results",
-    ]:
-
-        value = data.get(key)
-
-        if isinstance(
-            value,
-            list
-        ):
-            return value
-
-    return []
-
-
-def event_matches_market(
-    event,
-    market
-):
-
-    home = (
-        event.get("home_team")
-        or event.get("homeTeam")
-        or event.get("home")
-        or event.get("team1")
-        or event.get("participant1")
-    )
-
-    away = (
-        event.get("away_team")
-        or event.get("awayTeam")
-        or event.get("away")
-        or event.get("team2")
-        or event.get("participant2")
-    )
-
-    market_home = (
-        market.get("home_team")
-        or market.get("homeTeam")
-        or market.get("home")
-        or market.get("team1")
-        or market.get("participant1")
-    )
-
-    market_away = (
-        market.get("away_team")
-        or market.get("awayTeam")
-        or market.get("away")
-        or market.get("team2")
-        or market.get("participant2")
-    )
-
-    if (
-        home
-        and away
-        and market_home
-        and market_away
-    ):
-
-        return (
-            team_names_match(
-                home,
-                market_home
-            )
-            and
-            team_names_match(
-                away,
-                market_away
-            )
-        )
-
-    event_name = (
-        event.get("name")
-        or event.get("event")
-        or event.get("match")
-        or ""
-    )
-
-    market_name = (
-        market.get("name")
-        or market.get("event")
-        or market.get("match")
-        or ""
-    )
-
-    if (
-        event_name
-        and market_name
-    ):
-
-        return (
-            normalize_text(
-                event_name
-            )
-            == normalize_text(
-                market_name
-            )
-        )
-
-    return False
-
-
-def parse_market_event(
-    item
-):
-
-    if not isinstance(
-        item,
-        dict
-    ):
-        return []
-
-    event_home = (
-        item.get("home_team")
-        or item.get("homeTeam")
-        or item.get("home")
-        or item.get("team1")
-        or item.get("participant1")
-    )
-
-    event_away = (
-        item.get("away_team")
-        or item.get("awayTeam")
-        or item.get("away")
-        or item.get("team2")
-        or item.get("participant2")
-    )
-
-    bookmakers = (
-        item.get("bookmakers")
-        or item.get("sportsbooks")
-        or item.get("sites")
-        or item.get("providers")
-        or []
-    )
-
-    if isinstance(
-        bookmakers,
-        dict
-    ):
-
-        bookmakers = [
-            {
-                "name": key,
-                **(
-                    value
-                    if isinstance(
-                        value,
-                        dict
-                    )
-                    else {
-                        "odds": value
-                    }
-                )
-            }
-            for key, value
-            in bookmakers.items()
-        ]
-
-    rows = []
-
-    for bookmaker in bookmakers:
-
-        bookmaker_name = (
-            extract_bookmaker_name(
-                bookmaker
-            )
-        )
-
-        outcomes = (
-            bookmaker.get("outcomes")
-            or bookmaker.get("markets")
-            or bookmaker.get("odds")
-            or []
-        )
-
-        if isinstance(
-            outcomes,
-            dict
-        ):
-
-            possible_h2h = (
-                outcomes.get("h2h")
-                or outcomes.get("1x2")
-                or outcomes.get("match_winner")
-                or outcomes
-            )
-
-            outcomes = possible_h2h
-
-        if isinstance(
-            outcomes,
-            dict
-        ):
-
-            outcomes = [
-                {
-                    "name": key,
-                    "price": value
-                }
-                for key, value
-                in outcomes.items()
-            ]
-
-        if not isinstance(
-            outcomes,
-            list
-        ):
-            continue
-
-        for outcome in outcomes:
-
-            name = extract_outcome_name(
-                outcome
-            )
-
-            price = extract_outcome_price(
-                outcome
-            )
-
-            if (
-                name
-                and price is not None
-            ):
-
-                rows.append({
-
-                    "Home":
-                        event_home or "",
-
-                    "Away":
-                        event_away or "",
-
-                    "Bookmaker":
-                        bookmaker_name,
-
-                    "Outcome":
-                        name,
-
-                    "Odds":
-                        price,
-
-                })
-
-    return rows
-
-
 @st.cache_data(ttl=60)
-def get_market_data(
+def get_odds_api_events(
     api_key,
-    selected_date,
-    sport,
-    bookmakers
+    sport="football"
 ):
 
     if not api_key:
+
         return [], "NO_API_KEY"
 
-    headers = {
-        "x-api-key": api_key,
-        "Authorization":
-            f"Bearer {api_key}",
-    }
-
-    params = {
-        "sport":
-            sport.lower(),
-
-        "date":
-            selected_date,
-
-        "bookmakers":
-            ",".join(bookmakers),
-
-        "market":
-            DEFAULT_MARKET,
-    }
-
-    candidate_urls = [
-
-        f"{ODDS_API_BASE_URL}/odds",
-
-        f"{ODDS_API_BASE_URL}/odds-by-sport",
-
-        f"{ODDS_API_BASE_URL}/odds-by-date",
-
-    ]
-
-    last_error = ""
-
-    for url in candidate_urls:
-
-        try:
-
-            response = requests.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=15
-            )
-
-            if response.status_code == 404:
-                continue
-
-            if response.status_code in [
-                401,
-                403
-            ]:
-
-                return [], (
-                    "INVALID_API_KEY"
-                )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-            events = flatten_odds_response(
-                data
-            )
-
-            if events:
-
-                return events, "OK"
-
-            last_error = (
-                "EMPTY_RESPONSE"
-            )
-
-        except requests.RequestException as error:
-
-            last_error = str(
-                error
-            )
-
-        except ValueError:
-
-            last_error = (
-                "INVALID_JSON"
-            )
-
-    return [], (
-        last_error
-        or "NO_MARKET_DATA"
+    url = (
+        f"{ODDS_API_BASE_URL}/events"
     )
 
+    params = {
 
-def get_matching_market(
-    selected,
-    market_events,
+        "apiKey":
+            api_key,
+
+        "sport":
+            sport,
+
+        "status":
+            "pending",
+
+        "limit":
+            100,
+
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=20
+        )
+
+        if response.status_code == 401:
+
+            return [], "INVALID_API_KEY"
+
+        if response.status_code == 403:
+
+            return [], "API_ACCESS_DENIED"
+
+        if response.status_code == 429:
+
+            return [], "RATE_LIMIT"
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if isinstance(data, dict):
+
+            events = (
+                data.get("events")
+                or data.get("results")
+                or []
+            )
+
+        elif isinstance(data, list):
+
+            events = data
+
+        else:
+
+            events = []
+
+        if not events:
+
+            return [], "NO_ODDS_EVENTS"
+
+        return events, "OK"
+
+    except requests.RequestException as error:
+
+        return [], (
+            f"CONNECTION_ERROR: {error}"
+        )
+
+    except ValueError:
+
+        return [], "JSON_ERROR"
+
+
+@st.cache_data(ttl=30)
+def get_odds_for_event(
+    api_key,
+    event_id,
     bookmakers
 ):
 
-    matches = []
+    if (
+        not api_key
+        or not event_id
+    ):
 
-    for market_event in market_events:
+        return None, "NO_API_KEY"
 
-        market_home = (
-            market_event.get(
-                "home_team"
-            )
-            or market_event.get(
-                "homeTeam"
-            )
-            or market_event.get(
-                "home"
-            )
-            or market_event.get(
-                "team1"
-            )
-            or market_event.get(
-                "participant1"
-            )
-        )
-
-        market_away = (
-            market_event.get(
-                "away_team"
-            )
-            or market_event.get(
-                "awayTeam"
-            )
-            or market_event.get(
-                "away"
-            )
-            or market_event.get(
-                "team2"
-            )
-            or market_event.get(
-                "participant2"
-            )
-        )
-
-        if (
-            market_home
-            and market_away
-            and team_names_match(
-                selected["Local"],
-                market_home
-            )
-            and team_names_match(
-                selected["Visitante"],
-                market_away
-            )
-        ):
-
-            matches.append(
-                market_event
-            )
-
-    rows = []
-
-    for event in matches:
-
-        rows.extend(
-            parse_market_event(
-                event
-            )
-        )
-
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(
-        rows
+    url = (
+        f"{ODDS_API_BASE_URL}/odds"
     )
 
-    allowed = [
-        normalize_text(x)
-        for x in bookmakers
-    ]
+    params = {
 
-    df = df[
-        df["Bookmaker"]
-        .map(normalize_text)
-        .isin(allowed)
-    ].copy()
+        "apiKey":
+            api_key,
 
-    if df.empty:
-        return df
+        "eventId":
+            event_id,
 
-    return df
+    }
+
+    if bookmakers:
+
+        params["bookmakers"] = (
+            ",".join(bookmakers)
+        )
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=20
+        )
+
+        if response.status_code == 401:
+
+            return None, "INVALID_API_KEY"
+
+        if response.status_code == 403:
+
+            return None, "API_ACCESS_DENIED"
+
+        if response.status_code == 429:
+
+            return None, "RATE_LIMIT"
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        return data, "OK"
+
+    except requests.RequestException as error:
+
+        return None, (
+            f"CONNECTION_ERROR: {error}"
+        )
+
+    except ValueError:
+
+        return None, "JSON_ERROR"
 
 
-# ============================================================
-# NORMALIZACIÓN DEL OUTCOME
-# ============================================================
-
-def classify_outcome(
-    outcome,
+def extract_decimal_odds(
+    odds_data,
     home_name,
     away_name
 ):
 
-    normalized = normalize_text(
-        outcome
-    )
+    if not odds_data:
+        return []
 
-    if normalized in [
-        "draw",
-        "tie",
-        "x",
-        "empate",
-    ]:
-
-        return "D"
-
-    if (
-        team_names_match(
-            outcome,
-            home_name
-        )
+    if isinstance(
+        odds_data,
+        list
     ):
 
-        return "H"
+        if len(odds_data) == 1:
 
-    if (
-        team_names_match(
-            outcome,
-            away_name
-        )
-    ):
+            root = odds_data[0]
 
-        return "A"
+        else:
 
-    if normalized in [
-        "home",
-        "1",
-        "local",
-        "home team",
-    ]:
-
-        return "H"
-
-    if normalized in [
-        "away",
-        "2",
-        "visitante",
-        "away team",
-    ]:
-
-        return "A"
-
-    return None
-
-
-def normalize_market_rows(
-    market_df,
-    selected
-):
-
-    if market_df.empty:
-        return pd.DataFrame()
-
-    df = market_df.copy()
-
-    df["Selection"] = df[
-        "Outcome"
-    ].apply(
-        lambda x:
-        classify_outcome(
-            x,
-            selected["Local"],
-            selected["Visitante"]
-        )
-    )
-
-    df = df.dropna(
-        subset=["Selection"]
-    )
-
-    return df
-
-
-# ============================================================
-# MOTOR QUANT
-# ============================================================
-
-def calculate_quant_metrics(
-    probabilities,
-    odds,
-    selection
-):
-
-    if (
-        probabilities is None
-        or selection not in probabilities
-    ):
-        return None
-
-    probability = float(
-        probabilities[
-            selection
-        ]
-    )
-
-    if (
-        odds is None
-        or odds <= 1
-    ):
-        return None
-
-    implied_probability = (
-        1.0 / odds
-    )
-
-    edge = (
-        probability
-        - implied_probability
-    )
-
-    ev = (
-        probability
-        * odds
-        - 1.0
-    )
-
-    value_score = (
-        edge * 100
-        + ev * 100
-    )
-
-    if (
-        edge >= 0.05
-        and ev >= 0.05
-    ):
-
-        classification = "VALUE"
-
-    elif (
-        edge >= 0.02
-        and ev >= 0.02
-    ):
-
-        classification = (
-            "VALUE MODERADO"
-        )
+            root = {
+                "bookmakers": {}
+            }
 
     else:
 
-        classification = (
-            "NO VALUE"
+        root = odds_data
+
+    bookmakers_data = (
+        root.get(
+            "bookmakers",
+            {}
         )
+        if isinstance(root, dict)
+        else {}
+    )
 
-    return {
+    if not isinstance(
+        bookmakers_data,
+        dict
+    ):
+        return []
 
-        "probability":
-            probability,
+    results = []
 
-        "odds":
-            odds,
+    for bookmaker_name, markets in (
+        bookmakers_data.items()
+    ):
 
-        "implied_probability":
-            implied_probability,
+        if not isinstance(
+            markets,
+            list
+        ):
+            continue
 
-        "edge":
-            edge,
+        for market in markets:
 
-        "ev":
-            ev,
+            if not isinstance(
+                market,
+                dict
+            ):
+                continue
 
-        "value_score":
-            value_score,
+            market_name = str(
+                market.get(
+                    "name",
+                    market.get(
+                        "market",
+                        ""
+                    )
+                )
+            ).lower()
 
-        "classification":
-            classification,
+            if (
+                market_name
+                not in [
+                    "h2h",
+                    "moneyline",
+                    "match winner",
+                    "1x2",
+                    "winner",
+                ]
+            ):
+                continue
 
-    }
+            outcomes = (
+                market.get(
+                    "outcomes"
+                )
+                or market.get(
+                    "selections"
+                )
+                or market.get(
+                    "values"
+                )
+                or []
+            )
+
+            if isinstance(
+                outcomes,
+                dict
+            ):
+
+                outcomes = [
+                    {
+                        "name": key,
+                        "price": value
+                    }
+                    for key, value
+                    in outcomes.items()
+                ]
+
+            for outcome in outcomes:
+
+                if not isinstance(
+                    outcome,
+                    dict
+                ):
+                    continue
+
+                name = (
+                    outcome.get("name")
+                    or outcome.get("label")
+                    or outcome.get("outcome")
+                    or outcome.get("team")
+                )
+
+                price = (
+                    outcome.get("price")
+                    or outcome.get("odds")
+                    or outcome.get("decimal")
+                    or outcome.get("value")
+                )
+
+                if not name:
+                    continue
+
+                try:
+                    price = float(price)
+                except (
+                    TypeError,
+                    ValueError
+                ):
+                    continue
+
+                if price <= 1:
+                    continue
+
+                if team_names_match(
+                    name,
+                    home_name
+                ):
+
+                    outcome_code = "H"
+
+                elif team_names_match(
+                    name,
+                    away_name
+                ):
+
+                    outcome_code = "A"
+
+                elif normalize_text(
+                    name
+                ) in [
+                    "draw",
+                    "empate",
+                    "tie",
+                    "x",
+                ]:
+
+                    outcome_code = "D"
+
+                else:
+
+                    continue
+
+                results.append({
+
+                    "bookmaker":
+                        bookmaker_name,
+
+                    "outcome":
+                        outcome_code,
+
+                    "outcome_name":
+                        name,
+
+                    "odds":
+                        price,
+
+                })
+
+    return results
 
 
-def build_quant_table(
-    probabilities,
-    market_df,
-    selected
+def select_best_market_odds(
+    odds_rows
 ):
 
-    if (
-        probabilities is None
-        or market_df.empty
-    ):
-        return pd.DataFrame()
+    best = {}
 
-    rows = []
+    for row in odds_rows:
 
-    for _, row in market_df.iterrows():
-
-        selection = row[
-            "Selection"
+        outcome = row[
+            "outcome"
         ]
 
-        metrics = (
-            calculate_quant_metrics(
-                probabilities,
-                row["Odds"],
-                selection
+        if (
+            outcome not in best
+            or row["odds"]
+            > best[outcome]["odds"]
+        ):
+
+            best[outcome] = row
+
+    return best
+
+
+def find_matching_odds_event(
+    ts_event,
+    odds_events
+):
+
+    home_name = ts_event[
+        "Local"
+    ]
+
+    away_name = ts_event[
+        "Visitante"
+    ]
+
+    event_date = str(
+        ts_event[
+            "Fecha"
+        ]
+    )
+
+    candidates = []
+
+    for event in odds_events:
+
+        if not isinstance(
+            event,
+            dict
+        ):
+            continue
+
+        odds_home = (
+            event.get("home")
+            or event.get(
+                "homeTeam"
+            )
+            or event.get(
+                "home_team"
             )
         )
 
-        if metrics is None:
+        odds_away = (
+            event.get("away")
+            or event.get(
+                "awayTeam"
+            )
+            or event.get(
+                "away_team"
+            )
+        )
+
+        if not odds_home or not odds_away:
             continue
 
-        rows.append({
+        if not team_names_match(
+            home_name,
+            odds_home
+        ):
+            continue
 
-            "Casa":
-                row["Bookmaker"],
+        if not team_names_match(
+            away_name,
+            odds_away
+        ):
+            continue
 
-            "Selección":
-                {
-                    "H": "Local",
-                    "D": "Empate",
-                    "A": "Visitante",
-                }[
-                    selection
-                ],
-
-            "Cuota":
-                metrics["odds"],
-
-            "Prob. modelo":
-                metrics[
-                    "probability"
-                ],
-
-            "Prob. implícita":
-                metrics[
-                    "implied_probability"
-                ],
-
-            "Edge":
-                metrics["edge"],
-
-            "EV":
-                metrics["ev"],
-
-            "Value Score":
-                metrics[
-                    "value_score"
-                ],
-
-            "Estado":
-                metrics[
-                    "classification"
-                ],
-
-            "_selection":
-                selection,
-
-        })
-
-    if not rows:
-        return pd.DataFrame()
-
-    return (
-        pd.DataFrame(rows)
-        .sort_values(
-            "Value Score",
-            ascending=False
+        event_id = (
+            event.get("id")
+            or event.get("eventId")
+            or event.get(
+                "event_id"
+            )
         )
-        .reset_index(drop=True)
+
+        if not event_id:
+            continue
+
+        event_date_raw = (
+            event.get("date")
+            or event.get(
+                "commence_time"
+            )
+            or event.get(
+                "startTime"
+            )
+        )
+
+        date_score = 0
+
+        if event_date_raw:
+
+            try:
+
+                odds_date = str(
+                    event_date_raw
+                )[:10]
+
+                if odds_date == event_date:
+
+                    date_score = 1
+
+            except Exception:
+                pass
+
+        candidates.append(
+            (
+                date_score,
+                event
+            )
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda item: item[0],
+        reverse=True
     )
 
+    return candidates[0][1]
 
-def build_best_market(
-    quant_df
+
+def build_market_snapshot(
+    ts_event,
+    odds_events,
+    api_key,
+    bookmakers
 ):
 
-    if quant_df.empty:
-        return pd.DataFrame()
-
-    best_rows = []
-
-    for selection in [
-        "H",
-        "D",
-        "A"
-    ]:
-
-        subset = quant_df[
-            quant_df[
-                "_selection"
-            ]
-            == selection
-        ]
-
-        if subset.empty:
-            continue
-
-        best_rows.append(
-            subset.iloc[0]
+    matched_event = (
+        find_matching_odds_event(
+            ts_event,
+            odds_events
         )
-
-    if not best_rows:
-        return pd.DataFrame()
-
-    return pd.DataFrame(
-        best_rows
-    ).sort_values(
-        "Value Score",
-        ascending=False
     )
+
+    if matched_event is None:
+
+        return {
+            "status":
+                "NO_MATCH",
+            "rows":
+                [],
+            "best":
+                {},
+            "event_id":
+                None,
+        }
+
+    event_id = (
+        matched_event.get("id")
+        or matched_event.get(
+            "eventId"
+        )
+        or matched_event.get(
+            "event_id"
+        )
+    )
+
+    odds_data, status = (
+        get_odds_for_event(
+            api_key,
+            event_id,
+            bookmakers
+        )
+    )
+
+    if status != "OK":
+
+        return {
+            "status":
+                status,
+            "rows":
+                [],
+            "best":
+                {},
+            "event_id":
+                event_id,
+        }
+
+    rows = extract_decimal_odds(
+        odds_data,
+        ts_event["Local"],
+        ts_event["Visitante"]
+    )
+
+    best = select_best_market_odds(
+        rows
+    )
+
+    if not best:
+
+        return {
+            "status":
+                "NO_1X2_MARKET",
+            "rows":
+                [],
+            "best":
+                {},
+            "event_id":
+                event_id,
+        }
+
+    return {
+        "status":
+            "OK",
+        "rows":
+            rows,
+        "best":
+            best,
+        "event_id":
+            event_id,
+    }
 
 
 # ============================================================
@@ -2182,7 +1914,7 @@ with st.sidebar:
     )
 
     st.caption(
-        "Sports Data Hub — FASE 13"
+        "Sports Data Hub — FASE 14"
     )
 
     st.divider()
@@ -2243,18 +1975,31 @@ with st.sidebar:
     odds_api_key = st.text_input(
         "API Key de Odds-API.io",
         type="password",
-        placeholder="Pega aquí tu nueva API Key"
+        placeholder="Pega aquí tu API Key"
     )
+
+    bookmaker_options = [
+        "Bet365",
+        "Unibet",
+        "Betway",
+        "DraftKings",
+        "FanDuel",
+        "BetMGM",
+        "BetRivers",
+    ]
 
     selected_bookmakers = st.multiselect(
         "Casas a consultar",
-        DEFAULT_BOOKMAKERS,
-        default=DEFAULT_BOOKMAKERS
+        bookmaker_options,
+        default=[
+            "Bet365",
+            "Unibet"
+        ]
     )
 
     st.caption(
         "Proveedor: Odds-API.io · "
-        "Motor Quant FASE 13"
+        "FASE 14 · Comparador real de cuotas"
     )
 
     st.divider()
@@ -2299,7 +2044,7 @@ st.markdown(
 
 
 # ============================================================
-# DATOS DEPORTIVOS
+# EVENTOS
 # ============================================================
 
 events, event_status = get_events_day(
@@ -2315,101 +2060,50 @@ df_events = events_to_dataframe(
 
 
 # ============================================================
-# MERCADO
+# ODDS API — EVENTOS
 # ============================================================
-
-market_events = []
-market_status = "NO_API_KEY"
 
 if odds_api_key:
 
-    market_events, market_status = (
-        get_market_data(
+    odds_events, odds_status = (
+        get_odds_api_events(
             odds_api_key,
-            selected_date.strftime(
-                "%Y-%m-%d"
-            ),
-            sport_filter,
-            selected_bookmakers
+            "football"
         )
     )
 
+else:
+
+    odds_events = []
+    odds_status = "NO_API_KEY"
+
 
 # ============================================================
-# MATCHING GLOBAL
+# MERCADO POR EVENTO
 # ============================================================
 
-market_match_count = 0
+market_cache = {}
 
 if (
-    not df_events.empty
-    and market_events
+    odds_api_key
+    and not df_events.empty
+    and odds_status == "OK"
 ):
 
-    for _, selected_event in (
+    for _, event_row in (
         df_events.iterrows()
     ):
 
-        matched = False
+        event_id = event_row["ID"]
 
-        for market_event in market_events:
-
-            market_home = (
-                market_event.get(
-                    "home_team"
-                )
-                or market_event.get(
-                    "homeTeam"
-                )
-                or market_event.get(
-                    "home"
-                )
-                or market_event.get(
-                    "team1"
-                )
-                or market_event.get(
-                    "participant1"
-                )
-            )
-
-            market_away = (
-                market_event.get(
-                    "away_team"
-                )
-                or market_event.get(
-                    "awayTeam"
-                )
-                or market_event.get(
-                    "away"
-                )
-                or market_event.get(
-                    "team2"
-                )
-                or market_event.get(
-                    "participant2"
-                )
-            )
-
-            if (
-                market_home
-                and market_away
-                and team_names_match(
-                    selected_event["Local"],
-                    market_home
-                )
-                and team_names_match(
-                    selected_event[
-                        "Visitante"
-                    ],
-                    market_away
-                )
-            ):
-
-                matched = True
-                break
-
-        if matched:
-            market_match_count += 1
+        market_cache[
+            event_id
+        ] = build_market_snapshot(
+            event_row,
+            odds_events,
+            odds_api_key,
+            selected_bookmakers
+        )
 
 
 # ============================================================
@@ -2442,46 +2136,38 @@ with status2:
 
 with status3:
 
-    if not odds_api_key:
+    if odds_status == "OK":
 
-        label = (
-            "🟡 MERCADO SIN API KEY"
+        st.markdown(
+            """
+            <div class="status status-green">
+                🟢 MERCADO REAL
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        css = "status-yellow"
+    elif odds_status == "NO_API_KEY":
 
-    elif market_status != "OK":
-
-        label = (
-            "🔴 MERCADO NO DISPONIBLE"
+        st.markdown(
+            """
+            <div class="status status-yellow">
+                🟡 MERCADO SIN API KEY
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-
-        css = "status-red"
-
-    elif market_match_count == 0:
-
-        label = (
-            "🟡 SIN MATCHING"
-        )
-
-        css = "status-yellow"
 
     else:
 
-        label = (
-            "🟢 MERCADO CONECTADO"
+        st.markdown(
+            """
+            <div class="status status-red">
+                🔴 ERROR MERCADO
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-
-        css = "status-green"
-
-    st.markdown(
-        f"""
-        <div class="status {css}">
-            {label}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
 
 
 # ============================================================
@@ -2512,22 +2198,35 @@ elif event_status != "OK":
         f"{event_status}"
     )
 
-if odds_api_key:
 
-    if market_status == "INVALID_API_KEY":
+if odds_status == "INVALID_API_KEY":
 
-        st.error(
-            "La API Key de Odds-API.io "
-            "no fue aceptada."
-        )
+    st.error(
+        "La API Key de Odds-API.io "
+        "no es válida."
+    )
 
-    elif market_status != "OK":
+elif odds_status == "RATE_LIMIT":
 
-        st.warning(
-            "El proveedor de mercado no "
-            f"devolvió cuotas utilizables: "
-            f"{market_status}"
-        )
+    st.warning(
+        "Odds-API.io alcanzó el límite "
+        "de solicitudes. El sistema "
+        "no inventará cuotas."
+    )
+
+elif odds_status == "API_ACCESS_DENIED":
+
+    st.error(
+        "Odds-API.io rechazó el acceso "
+        "a la API."
+    )
+
+elif odds_status == "CONNECTION_ERROR":
+
+    st.error(
+        "No fue posible conectar "
+        "con Odds-API.io."
+    )
 
 
 # ============================================================
@@ -2543,6 +2242,17 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+events_with_market = 0
+
+if market_cache:
+
+    events_with_market = sum(
+        1
+        for snapshot
+        in market_cache.values()
+        if snapshot["status"] == "OK"
+    )
+
 c1, c2, c3, c4 = st.columns(4)
 
 c1.metric(
@@ -2553,8 +2263,7 @@ c1.metric(
 c2.metric(
     "Deportes",
     (
-        df_events["Deporte"]
-        .nunique()
+        df_events["Deporte"].nunique()
         if not df_events.empty
         else 0
     )
@@ -2563,8 +2272,7 @@ c2.metric(
 c3.metric(
     "Ligas",
     (
-        df_events["Liga"]
-        .nunique()
+        df_events["Liga"].nunique()
         if not df_events.empty
         else 0
     )
@@ -2572,7 +2280,7 @@ c3.metric(
 
 c4.metric(
     "Eventos con mercado",
-    market_match_count
+    events_with_market
 )
 
 
@@ -2631,9 +2339,7 @@ if not df_events.empty:
             + country_options
         )
 
-    filtered = (
-        df_events.copy()
-    )
+    filtered = df_events.copy()
 
     if selected_league != "Todas":
 
@@ -2714,14 +2420,18 @@ else:
         st.markdown(
             f"""
             <div class="gray">
-                📅 {format_date_display(
-                    row["Fecha"]
-                )}
+                📅 {
+                    format_date_display(
+                        row["Fecha"]
+                    )
+                }
                 &nbsp;&nbsp;
-                ⏰ {safe_value(
-                    row["Hora"],
-                    "--"
-                )}
+                ⏰ {
+                    safe_value(
+                        row["Hora"],
+                        "--"
+                    )
+                }
             </div>
             """,
             unsafe_allow_html=True
@@ -2741,6 +2451,7 @@ else:
             )
 
             if value:
+
                 location_parts.append(
                     value
                 )
@@ -2761,80 +2472,49 @@ else:
             unsafe_allow_html=True
         )
 
-        # ----------------------------------------------------
-        # ESTADO DE MERCADO
-        # ----------------------------------------------------
+        snapshot = market_cache.get(
+            event_id
+        )
 
-        market_found = False
+        if (
+            odds_api_key
+            and odds_status == "OK"
+        ):
 
-        if market_events:
+            if snapshot:
 
-            for market_event in (
-                market_events
-            ):
+                if snapshot["status"] == "OK":
 
-                market_home = (
-                    market_event.get(
-                        "home_team"
+                    st.success(
+                        "🟢 MERCADO COINCIDENTE"
                     )
-                    or market_event.get(
-                        "homeTeam"
-                    )
-                    or market_event.get(
-                        "home"
-                    )
-                    or market_event.get(
-                        "team1"
-                    )
-                )
 
-                market_away = (
-                    market_event.get(
-                        "away_team"
-                    )
-                    or market_event.get(
-                        "awayTeam"
-                    )
-                    or market_event.get(
-                        "away"
-                    )
-                    or market_event.get(
-                        "team2"
-                    )
-                )
+                elif snapshot[
+                    "status"
+                ] == "NO_MATCH":
 
-                if (
-                    market_home
-                    and market_away
-                    and team_names_match(
-                        row["Local"],
-                        market_home
+                    st.warning(
+                        "🟡 SIN CUOTA COINCIDENTE"
                     )
-                    and team_names_match(
-                        row["Visitante"],
-                        market_away
+
+                elif snapshot[
+                    "status"
+                ] == "NO_1X2_MARKET":
+
+                    st.warning(
+                        "🟡 SIN MERCADO 1X2"
                     )
-                ):
 
-                    market_found = True
-                    break
+                else:
 
-        if not odds_api_key:
+                    st.warning(
+                        "🟡 MERCADO NO DISPONIBLE"
+                    )
+
+        elif not odds_api_key:
 
             st.warning(
                 "🟡 SIN API KEY"
-            )
-
-        elif market_found:
-
-            st.success(
-                "🟢 MERCADO COINCIDENTE"
-            )
-
-        else:
-
-            st.warning(
-                "🟡 SIN CUOTA COINCIDENTE"
             )
 
         st.markdown(
@@ -2863,6 +2543,7 @@ selected_event_id = (
         "selected_event_id"
     )
 )
+
 
 if selected_event_id is not None:
 
@@ -2906,24 +2587,31 @@ if selected_event_id is not None:
         # ====================================================
 
         model_compatible = (
-            bool(selected["IDLocal"])
+
+            bool(
+                selected["IDLocal"]
+            )
+
             and bool(
                 selected["IDVisitante"]
             )
+
             and bool(
                 selected["Local"]
             )
+
             and bool(
                 selected["Visitante"]
             )
+
         )
 
         if not model_compatible:
 
             st.warning(
                 "Este evento no tiene "
-                "estructura Local vs "
-                "Visitante compatible."
+                "estructura Local vs Visitante "
+                "compatible con el modelo 1X2."
             )
 
         else:
@@ -2941,9 +2629,7 @@ if selected_event_id is not None:
                 unsafe_allow_html=True
             )
 
-            a1, a2, a3, a4 = (
-                st.columns(4)
-            )
+            a1, a2, a3, a4 = st.columns(4)
 
             a1.metric(
                 "Deporte",
@@ -2973,6 +2659,7 @@ if selected_event_id is not None:
                     "--"
                 )
             )
+
 
             # =================================================
             # HISTÓRICO
@@ -3049,6 +2736,7 @@ if selected_event_id is not None:
                         f"{away_status}"
                     )
 
+
             # =================================================
             # FORMA
             # =================================================
@@ -3071,9 +2759,7 @@ if selected_event_id is not None:
                     combined_history,
                     selected["Local"],
                     history_window,
-                    before_date=selected[
-                        "Fecha"
-                    ]
+                    before_date=selected["Fecha"]
                 )
             )
 
@@ -3082,9 +2768,7 @@ if selected_event_id is not None:
                     combined_history,
                     selected["Visitante"],
                     history_window,
-                    before_date=selected[
-                        "Fecha"
-                    ]
+                    before_date=selected["Fecha"]
                 )
             )
 
@@ -3109,14 +2793,10 @@ if selected_event_id is not None:
                             "Partidos analizados",
 
                         selected["Local"]:
-                            home_form[
-                                "Partidos"
-                            ],
+                            home_form["Partidos"],
 
                         selected["Visitante"]:
-                            away_form[
-                                "Partidos"
-                            ],
+                            away_form["Partidos"],
                     },
 
                     {
@@ -3125,17 +2805,13 @@ if selected_event_id is not None:
 
                         selected["Local"]:
                             round(
-                                home_form[
-                                    "PPP"
-                                ],
+                                home_form["PPP"],
                                 3
                             ),
 
                         selected["Visitante"]:
                             round(
-                                away_form[
-                                    "PPP"
-                                ],
+                                away_form["PPP"],
                                 3
                             ),
                     },
@@ -3146,17 +2822,13 @@ if selected_event_id is not None:
 
                         selected["Local"]:
                             round(
-                                home_form[
-                                    "GF"
-                                ],
+                                home_form["GF"],
                                 3
                             ),
 
                         selected["Visitante"]:
                             round(
-                                away_form[
-                                    "GF"
-                                ],
+                                away_form["GF"],
                                 3
                             ),
                     },
@@ -3167,17 +2839,13 @@ if selected_event_id is not None:
 
                         selected["Local"]:
                             round(
-                                home_form[
-                                    "GC"
-                                ],
+                                home_form["GC"],
                                 3
                             ),
 
                         selected["Visitante"]:
                             round(
-                                away_form[
-                                    "GC"
-                                ],
+                                away_form["GC"],
                                 3
                             ),
                     },
@@ -3187,14 +2855,10 @@ if selected_event_id is not None:
                             "Victorias",
 
                         selected["Local"]:
-                            home_form[
-                                "Victorias"
-                            ],
+                            home_form["Victorias"],
 
                         selected["Visitante"]:
-                            away_form[
-                                "Victorias"
-                            ],
+                            away_form["Victorias"],
                     },
 
                     {
@@ -3202,14 +2866,10 @@ if selected_event_id is not None:
                             "Empates",
 
                         selected["Local"]:
-                            home_form[
-                                "Empates"
-                            ],
+                            home_form["Empates"],
 
                         selected["Visitante"]:
-                            away_form[
-                                "Empates"
-                            ],
+                            away_form["Empates"],
                     },
 
                     {
@@ -3217,14 +2877,10 @@ if selected_event_id is not None:
                             "Derrotas",
 
                         selected["Local"]:
-                            home_form[
-                                "Derrotas"
-                            ],
+                            home_form["Derrotas"],
 
                         selected["Visitante"]:
-                            away_form[
-                                "Derrotas"
-                            ],
+                            away_form["Derrotas"],
                     },
 
                     {
@@ -3233,17 +2889,13 @@ if selected_event_id is not None:
 
                         selected["Local"]:
                             round(
-                                home_form[
-                                    "DG"
-                                ],
+                                home_form["DG"],
                                 3
                             ),
 
                         selected["Visitante"]:
                             round(
-                                away_form[
-                                    "DG"
-                                ],
+                                away_form["DG"],
                                 3
                             ),
                     },
@@ -3255,6 +2907,7 @@ if selected_event_id is not None:
                     use_container_width=True,
                     hide_index=True
                 )
+
 
             # =================================================
             # DATASET
@@ -3281,12 +2934,11 @@ if selected_event_id is not None:
 
                 st.warning(
                     "No existe suficiente "
-                    "información histórica "
-                    "para construir el dataset."
+                    "información histórica para "
+                    "construir el dataset."
                 )
 
                 model = None
-
                 model_status = (
                     "INSUFFICIENT_DATA"
                 )
@@ -3307,9 +2959,7 @@ if selected_event_id is not None:
                     .to_dict()
                 )
 
-                d1, d2, d3 = (
-                    st.columns(3)
-                )
+                d1, d2, d3 = st.columns(3)
 
                 d1.metric(
                     "Local",
@@ -3351,6 +3001,7 @@ if selected_event_id is not None:
                     )
                 )
 
+
             # =================================================
             # MODELO
             # =================================================
@@ -3368,22 +3019,55 @@ if selected_event_id is not None:
 
             if model is None:
 
-                st.warning(
-                    "🟡 Modelo bloqueado: "
-                    "no existe suficiente "
-                    "información histórica válida."
-                )
+                if (
+                    model_status
+                    == "INSUFFICIENT_DATA"
+                ):
+
+                    st.warning(
+                        "🟡 Modelo bloqueado: "
+                        "no hay suficientes "
+                        "observaciones históricas "
+                        "válidas."
+                    )
+
+                elif (
+                    model_status
+                    == "ONE_CLASS_ONLY"
+                ):
+
+                    st.warning(
+                        "🟡 Modelo bloqueado: "
+                        "el histórico contiene "
+                        "un único tipo de resultado."
+                    )
+
+                elif (
+                    model_status
+                    == "INVALID_TRAIN_CLASSES"
+                ):
+
+                    st.warning(
+                        "🟡 Modelo bloqueado: "
+                        "la muestra de entrenamiento "
+                        "no contiene suficientes clases."
+                    )
+
+                else:
+
+                    st.warning(
+                        f"🟡 Modelo no entrenado: "
+                        f"{model_status}"
+                    )
 
             else:
 
                 st.success(
                     "🟢 Modelo entrenado y "
-                    "validado temporalmente."
+                    "validado con división temporal."
                 )
 
-                v1, v2, v3 = (
-                    st.columns(3)
-                )
+                v1, v2, v3 = st.columns(3)
 
                 v1.metric(
                     "Entrenamiento",
@@ -3401,7 +3085,13 @@ if selected_event_id is not None:
 
                 v3.metric(
                     "Accuracy",
-                    f"{model_status['accuracy']:.1%}"
+                    f"""
+                    {
+                        model_status[
+                            "accuracy"
+                        ]:.1%
+                    }
+                    """
                 )
 
                 current_features = (
@@ -3433,24 +3123,67 @@ if selected_event_id is not None:
                             unsafe_allow_html=True
                         )
 
-                        p1, p2, p3 = (
-                            st.columns(3)
-                        )
+                        p1, p2, p3 = st.columns(3)
 
                         p1.metric(
                             "🏠 Local",
-                            f"{probabilities['H']:.1%}"
+                            f"""
+                            {
+                                probabilities["H"]
+                                :.1%
+                            }
+                            """
                         )
 
                         p2.metric(
                             "🤝 Empate",
-                            f"{probabilities['D']:.1%}"
+                            f"""
+                            {
+                                probabilities["D"]
+                                :.1%
+                            }
+                            """
                         )
 
                         p3.metric(
                             "✈️ Visitante",
-                            f"{probabilities['A']:.1%}"
+                            f"""
+                            {
+                                probabilities["A"]
+                                :.1%
+                            }
+                            """
                         )
+
+                        best = max(
+                            probabilities,
+                            key=probabilities.get
+                        )
+
+                        st.info(
+                            f"Resultado con mayor "
+                            f"probabilidad estimada: "
+                            f"**{outcome_label(best)}** "
+                            f"("
+                            f"{probabilities[best]:.1%}"
+                            f")"
+                        )
+
+                    else:
+
+                        st.warning(
+                            "No fue posible generar "
+                            "la predicción."
+                        )
+
+                else:
+
+                    st.warning(
+                        "No existe suficiente "
+                        "información pre-partido "
+                        "para generar una predicción."
+                    )
+
 
             # =================================================
             # MERCADO REAL
@@ -3465,81 +3198,152 @@ if selected_event_id is not None:
                 unsafe_allow_html=True
             )
 
-            selected_market_df = pd.DataFrame()
+            selected_market = (
+                market_cache.get(
+                    selected_event_id
+                )
+            )
 
             if not odds_api_key:
 
                 st.warning(
-                    "Introduce la API Key "
-                    "de Odds-API.io."
+                    "🟡 Introduce la API Key "
+                    "de Odds-API.io en la barra lateral."
                 )
 
-            elif market_status != "OK":
+            elif odds_status != "OK":
 
                 st.warning(
-                    "No existe mercado "
-                    "disponible para este análisis."
+                    f"🟡 Mercado no disponible: "
+                    f"{odds_status}"
+                )
+
+            elif not selected_market:
+
+                st.warning(
+                    "🟡 No existe información "
+                    "de mercado para este evento."
+                )
+
+            elif (
+                selected_market[
+                    "status"
+                ] != "OK"
+            ):
+
+                status_text = {
+
+                    "NO_MATCH":
+                        "No se encontró coincidencia "
+                        "real entre el partido y "
+                        "Odds-API.io.",
+
+                    "NO_1X2_MARKET":
+                        "Se encontró el evento, "
+                        "pero no existe mercado 1X2 "
+                        "disponible.",
+
+                }.get(
+                    selected_market[
+                        "status"
+                    ],
+                    selected_market[
+                        "status"
+                    ]
+                )
+
+                st.warning(
+                    f"🟡 {status_text}"
                 )
 
             else:
 
-                selected_market_df = (
-                    get_matching_market(
-                        selected,
-                        market_events,
-                        selected_bookmakers
-                    )
+                best_market = (
+                    selected_market[
+                        "best"
+                    ]
                 )
 
-                selected_market_df = (
-                    normalize_market_rows(
-                        selected_market_df,
-                        selected
-                    )
-                )
+                market_rows = []
 
-                if selected_market_df.empty:
+                for code in [
+                    "H",
+                    "D",
+                    "A"
+                ]:
 
-                    st.warning(
-                        "🟡 No existe cuota "
-                        "coincidente para "
-                        "este evento."
-                    )
+                    if code in best_market:
 
-                else:
-
-                    st.success(
-                        "🟢 Mercado coincidente "
-                        "encontrado."
-                    )
-
-                    display_market = (
-                        selected_market_df[
-                            [
-                                "Bookmaker",
-                                "Outcome",
-                                "Odds"
-                            ]
+                        row = best_market[
+                            code
                         ]
-                        .rename(
-                            columns={
-                                "Bookmaker":
-                                    "Casa",
 
-                                "Outcome":
-                                    "Selección",
+                        market_rows.append({
 
-                                "Odds":
-                                    "Cuota",
-                            }
+                            "Resultado":
+                                outcome_label(
+                                    code
+                                ),
+
+                            "Casa":
+                                row[
+                                    "bookmaker"
+                                ],
+
+                            "Cuota":
+                                row[
+                                    "odds"
+                                ],
+
+                            "Prob. implícita":
+                                (
+                                    decimal_to_probability(
+                                        row[
+                                            "odds"
+                                        ]
+                                    )
+                                ),
+
+                        })
+
+                if market_rows:
+
+                    market_df = pd.DataFrame(
+                        market_rows
+                    )
+
+                    market_df[
+                        "Cuota"
+                    ] = market_df[
+                        "Cuota"
+                    ].round(3)
+
+                    market_df[
+                        "Prob. implícita"
+                    ] = (
+                        market_df[
+                            "Prob. implícita"
+                        ]
+                        .map(
+                            lambda x:
+                            f"{x:.2%}"
+                            if x is not None
+                            else "--"
                         )
                     )
 
                     st.dataframe(
-                        display_market,
+                        market_df,
                         use_container_width=True,
                         hide_index=True
                     )
+
+                    st.caption(
+                        "Se muestra la mejor cuota "
+                        "decimal disponible entre "
+                        "las casas seleccionadas."
+                    )
+
 
             # =================================================
             # MOTOR QUANT
@@ -3554,14 +3358,99 @@ if selected_event_id is not None:
                 unsafe_allow_html=True
             )
 
+            quant_rows = []
+
             if (
-                probabilities is None
-                or selected_market_df.empty
+                probabilities
+                and selected_market
+                and selected_market[
+                    "status"
+                ] == "OK"
             ):
 
-                q1, q2, q3 = (
-                    st.columns(3)
+                best_market = (
+                    selected_market[
+                        "best"
+                    ]
                 )
+
+                for code in [
+                    "H",
+                    "D",
+                    "A"
+                ]:
+
+                    if code not in best_market:
+                        continue
+
+                    odds_row = best_market[
+                        code
+                    ]
+
+                    model_probability = (
+                        probabilities.get(
+                            code
+                        )
+                    )
+
+                    market_probability = (
+                        decimal_to_probability(
+                            odds_row["odds"]
+                        )
+                    )
+
+                    edge = calculate_edge(
+                        model_probability,
+                        market_probability
+                    )
+
+                    ev = calculate_ev(
+                        model_probability,
+                        odds_row["odds"]
+                    )
+
+                    value_score = (
+                        calculate_value_score(
+                            edge,
+                            ev
+                        )
+                    )
+
+                    quant_rows.append({
+
+                        "Resultado":
+                            outcome_label(code),
+
+                        "Casa":
+                            odds_row[
+                                "bookmaker"
+                            ],
+
+                        "Cuota":
+                            odds_row[
+                                "odds"
+                            ],
+
+                        "Prob. modelo":
+                            model_probability,
+
+                        "Prob. implícita":
+                            market_probability,
+
+                        "Edge":
+                            edge,
+
+                        "EV":
+                            ev,
+
+                        "Value Score":
+                            value_score,
+
+                    })
+
+            if not quant_rows:
+
+                q1, q2, q3 = st.columns(3)
 
                 q1.metric(
                     "Edge",
@@ -3578,174 +3467,106 @@ if selected_event_id is not None:
                     "BLOQUEADO"
                 )
 
-                st.info(
+                st.caption(
                     "El Motor Quant requiere "
                     "simultáneamente probabilidad "
-                    "propia y mercado real "
-                    "coincidente."
+                    "propia y mercado 1X2 coincidente."
                 )
 
             else:
 
-                quant_df = (
-                    build_quant_table(
-                        probabilities,
-                        selected_market_df,
-                        selected
-                    )
+                quant_df = pd.DataFrame(
+                    quant_rows
                 )
 
-                if quant_df.empty:
+                display_df = quant_df.copy()
+
+                display_df[
+                    "Cuota"
+                ] = display_df[
+                    "Cuota"
+                ].map(
+                    lambda x:
+                    f"{x:.2f}"
+                )
+
+                for column in [
+                    "Prob. modelo",
+                    "Prob. implícita",
+                    "Edge",
+                    "EV"
+                ]:
+
+                    display_df[
+                        column
+                    ] = display_df[
+                        column
+                    ].map(
+                        lambda x:
+                        f"{x:.2%}"
+                    )
+
+                display_df[
+                    "Value Score"
+                ] = display_df[
+                    "Value Score"
+                ].map(
+                    lambda x:
+                    f"{x:.2f}"
+                )
+
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                positive = quant_df[
+                    (
+                        quant_df["Edge"]
+                        > 0
+                    )
+                    &
+                    (
+                        quant_df["EV"]
+                        > 0
+                    )
+                ]
+
+                if positive.empty:
 
                     st.warning(
-                        "No existen resultados "
-                        "cuantitativos válidos."
+                        "🟡 Mercado disponible, "
+                        "pero no se detecta Value "
+                        "positivo con los datos actuales."
                     )
 
                 else:
 
-                    best_market = (
-                        build_best_market(
-                            quant_df
-                        )
+                    best_value = (
+                        positive.sort_values(
+                            "Value Score",
+                            ascending=False
+                        ).iloc[0]
                     )
 
-                    if best_market.empty:
-
-                        st.warning(
-                            "No existe mercado "
-                            "cuantitativo válido."
-                        )
-
-                    else:
-
-                        top = (
-                            best_market.iloc[0]
-                        )
-
-                        q1, q2, q3, q4 = (
-                            st.columns(4)
-                        )
-
-                        q1.metric(
-                            "Mejor selección",
-                            top["Selección"]
-                        )
-
-                        q2.metric(
-                            "Mejor cuota",
-                            f"{top['Cuota']:.2f}"
-                        )
-
-                        q3.metric(
-                            "Edge",
-                            f"{top['Edge']:.1%}"
-                        )
-
-                        q4.metric(
-                            "EV",
-                            f"{top['EV']:.1%}"
-                        )
-
-                        if (
-                            top["Estado"]
-                            == "VALUE"
-                        ):
-
-                            st.success(
-                                f"🟢 VALUE DETECTADO · "
-                                f"{top['Selección']} · "
-                                f"{top['Cuota']:.2f}"
-                            )
-
-                        elif (
-                            top["Estado"]
-                            == "VALUE MODERADO"
-                        ):
-
-                            st.warning(
-                                f"🟡 VALUE MODERADO · "
-                                f"{top['Selección']} · "
-                                f"{top['Cuota']:.2f}"
-                            )
-
-                        else:
-
-                            st.info(
-                                "🔵 NO VALUE"
-                            )
-
-                        st.markdown(
-                            """
-                            ### Comparación de mercado
-                            """
-                        )
-
-                        table_to_show = (
-                            quant_df[
-                                [
-                                    "Casa",
-                                    "Selección",
-                                    "Cuota",
-                                    "Prob. modelo",
-                                    "Prob. implícita",
-                                    "Edge",
-                                    "EV",
-                                    "Value Score",
-                                    "Estado",
-                                ]
-                            ].copy()
-                        )
-
-                        st.dataframe(
-                            table_to_show,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-
-                                "Cuota":
-                                    st.column_config.NumberColumn(
-                                        format="%.2f"
-                                    ),
-
-                                "Prob. modelo":
-                                    st.column_config.NumberColumn(
-                                        format="%.1%"
-                                    ),
-
-                                "Prob. implícita":
-                                    st.column_config.NumberColumn(
-                                        format="%.1%"
-                                    ),
-
-                                "Edge":
-                                    st.column_config.NumberColumn(
-                                        format="%.1%"
-                                    ),
-
-                                "EV":
-                                    st.column_config.NumberColumn(
-                                        format="%.1%"
-                                    ),
-
-                                "Value Score":
-                                    st.column_config.NumberColumn(
-                                        format="%.2f"
-                                    ),
-
-                            }
-                        )
-
-                        st.caption(
-                            "Edge = probabilidad propia "
-                            "menos probabilidad implícita. "
-                            "EV = probabilidad propia × "
-                            "cuota − 1."
-                        )
+                    st.success(
+                        f"🟢 Mejor oportunidad detectada: "
+                        f"**{best_value['Resultado']}** · "
+                        f""
+                        f"Cuota {best_value['Cuota']:.2f} · "
+                        f""
+                        f"Edge {best_value['Edge']:.2%} · "
+                        f""
+                        f"EV {best_value['EV']:.2%} · "
+                        f""
+                        f"Value Score "
+                        f"{best_value['Value Score']:.2f}"
+                    )
 
 
 # ============================================================
-# RANKING GLOBAL
+# RANKING
 # ============================================================
 
 st.divider()
@@ -3763,59 +3584,66 @@ ranking_rows = []
 
 if (
     odds_api_key
-    and market_status == "OK"
-    and not df_events.empty
+    and odds_status == "OK"
 ):
 
-    for _, event in df_events.iterrows():
+    for _, event_row in (
+        df_events.iterrows()
+    ):
 
-        if (
-            not event["IDLocal"]
-            or not event["IDVisitante"]
-        ):
-            continue
+        event_id = event_row[
+            "ID"
+        ]
 
-        home_raw, hs = (
-            get_team_history(
-                event["IDLocal"]
-            )
+        snapshot = market_cache.get(
+            event_id
         )
 
-        away_raw, aws = (
-            get_team_history(
-                event["IDVisitante"]
-            )
-        )
-
-        if (
-            hs != "OK"
-            or aws != "OK"
-        ):
+        if not snapshot:
             continue
 
-        home_hist = (
+        if snapshot[
+            "status"
+        ] != "OK":
+            continue
+
+        (
+            home_raw,
+            _
+        ) = get_team_history(
+            event_row["IDLocal"]
+        )
+
+        (
+            away_raw,
+            _
+        ) = get_team_history(
+            event_row["IDVisitante"]
+        )
+
+        home_history = (
             history_to_dataframe(
                 home_raw
             )
         )
 
-        away_hist = (
+        away_history = (
             history_to_dataframe(
                 away_raw
             )
         )
 
-        training = (
+        training_df = (
             build_training_dataset(
-                home_hist,
-                away_hist,
+                home_history,
+                away_history,
                 history_window
             )
         )
 
         model, model_status = (
             train_model(
-                training
+                training_df
             )
         )
 
@@ -3824,9 +3652,9 @@ if (
 
         features = (
             build_pre_match_features(
-                event,
-                home_hist,
-                away_hist,
+                event_row,
+                home_history,
+                away_history,
                 history_window
             )
         )
@@ -3834,127 +3662,111 @@ if (
         if not features:
             continue
 
-        probs = predict_match(
+        probabilities = predict_match(
             model,
             features
         )
 
-        market_df = (
-            get_matching_market(
-                event,
-                market_events,
-                selected_bookmakers
-            )
-        )
-
-        market_df = (
-            normalize_market_rows(
-                market_df,
-                event
-            )
-        )
-
-        quant = (
-            build_quant_table(
-                probs,
-                market_df,
-                event
-            )
-        )
-
-        if quant.empty:
+        if not probabilities:
             continue
 
-        best = quant.iloc[0]
+        for code in [
+            "H",
+            "D",
+            "A"
+        ]:
 
-        ranking_rows.append({
+            if code not in snapshot[
+                "best"
+            ]:
+                continue
 
-            "Partido":
-                event["Evento"],
+            odds_row = snapshot[
+                "best"
+            ][code]
 
-            "Casa":
-                best["Casa"],
+            model_probability = (
+                probabilities.get(
+                    code
+                )
+            )
 
-            "Selección":
-                best["Selección"],
+            implied_probability = (
+                decimal_to_probability(
+                    odds_row["odds"]
+                )
+            )
 
-            "Cuota":
-                best["Cuota"],
+            edge = calculate_edge(
+                model_probability,
+                implied_probability
+            )
 
-            "Prob. modelo":
-                best["Prob. modelo"],
+            ev = calculate_ev(
+                model_probability,
+                odds_row["odds"]
+            )
 
-            "Prob. implícita":
-                best["Prob. implícita"],
+            value_score = (
+                calculate_value_score(
+                    edge,
+                    ev
+                )
+            )
 
-            "Edge":
-                best["Edge"],
+            if (
+                edge is None
+                or ev is None
+                or value_score is None
+            ):
+                continue
 
-            "EV":
-                best["EV"],
+            ranking_rows.append({
 
-            "Value Score":
-                best["Value Score"],
+                "Evento":
+                    event_row[
+                        "Evento"
+                    ],
 
-            "Estado":
-                best["Estado"],
+                "Liga":
+                    event_row[
+                        "Liga"
+                    ],
 
-        })
+                "Resultado":
+                    outcome_label(
+                        code
+                    ),
+
+                "Casa":
+                    odds_row[
+                        "bookmaker"
+                    ],
+
+                "Cuota":
+                    odds_row[
+                        "odds"
+                    ],
+
+                "Prob. modelo":
+                    model_probability,
+
+                "Prob. implícita":
+                    implied_probability,
+
+                "Edge":
+                    edge,
+
+                "EV":
+                    ev,
+
+                "Value Score":
+                    value_score,
+
+            })
 
 
-if ranking_rows:
-
-    ranking_df = (
-        pd.DataFrame(
-            ranking_rows
-        )
-        .sort_values(
-            "Value Score",
-            ascending=False
-        )
-        .reset_index(drop=True)
-    )
-
-    st.dataframe(
-        ranking_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-
-            "Cuota":
-                st.column_config.NumberColumn(
-                    format="%.2f"
-                ),
-
-            "Prob. modelo":
-                st.column_config.NumberColumn(
-                    format="%.1%"
-                ),
-
-            "Prob. implícita":
-                st.column_config.NumberColumn(
-                    format="%.1%"
-                ),
-
-            "Edge":
-                st.column_config.NumberColumn(
-                    format="%.1%"
-                ),
-
-            "EV":
-                st.column_config.NumberColumn(
-                    format="%.1%"
-                ),
-
-            "Value Score":
-                st.column_config.NumberColumn(
-                    format="%.2f"
-                ),
-
-        }
-    )
-
-else:
+if not ranking_rows:
 
     st.info(
         "No existen oportunidades "
@@ -3963,11 +3775,93 @@ else:
     )
 
     st.caption(
-        "El ranking requiere "
-        "probabilidad propia + cuota "
-        "real coincidente + "
-        "probabilidad implícita + "
-        "Edge + EV."
+        "El ranking requiere simultáneamente "
+        "probabilidad propia + cuota real "
+        "coincidente + probabilidad implícita "
+        "+ Edge + EV."
+    )
+
+else:
+
+    ranking_df = pd.DataFrame(
+        ranking_rows
+    )
+
+    ranking_df = (
+        ranking_df
+        .sort_values(
+            "Value Score",
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    ranking_df.insert(
+        0,
+        "Rank",
+        range(
+            1,
+            len(ranking_df) + 1
+        )
+    )
+
+    display_ranking = (
+        ranking_df.copy()
+    )
+
+    display_ranking[
+        "Cuota"
+    ] = display_ranking[
+        "Cuota"
+    ].map(
+        lambda x:
+        f"{x:.2f}"
+    )
+
+    for column in [
+        "Prob. modelo",
+        "Prob. implícita",
+        "Edge",
+        "EV"
+    ]:
+
+        display_ranking[
+            column
+        ] = display_ranking[
+            column
+        ].map(
+            lambda x:
+            f"{x:.2%}"
+        )
+
+    display_ranking[
+        "Value Score"
+    ] = display_ranking[
+        "Value Score"
+    ].map(
+        lambda x:
+        f"{x:.2f}"
+    )
+
+    st.dataframe(
+        display_ranking,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    top = ranking_df.iloc[0]
+
+    st.success(
+        f"🏆 TOP 1 · "
+        f"{top['Evento']} · "
+        f"{top['Resultado']} · "
+        f"Cuota {top['Cuota']:.2f} · "
+        f"Edge {top['Edge']:.2%} · "
+        f"EV {top['EV']:.2%} · "
+        f"Value Score "
+        f"{top['Value Score']:.2f}"
     )
 
 
@@ -4022,6 +3916,10 @@ st.markdown(
 
     <br><br>
 
+    🟢 Cuotas 1X2 obtenidas de mercados reales.
+
+    <br><br>
+
     🟢 Probabilidad implícita calculada directamente
     desde la cuota decimal.
 
@@ -4035,8 +3933,8 @@ st.markdown(
 
     <br><br>
 
-    🟢 Value Score calculado únicamente cuando
-    existen probabilidad propia y mercado coincidente.
+    🟢 Value Score calculado únicamente cuando existen
+    probabilidad propia y mercado coincidente.
 
     <br><br>
 
@@ -4058,8 +3956,8 @@ st.markdown(
     <br><br>
 
     El sistema bloquea automáticamente cualquier
-    cálculo cuando los datos no son suficientes o
-    no existe coincidencia real de mercado.
+    cálculo cuando los datos no son suficientes
+    o no existe coincidencia real de mercado.
 
     </div>
     """,
@@ -4081,6 +3979,8 @@ with st.expander(
 
         TheSportsDB
 
+        Eventos → Equipos → Ligas → Fechas
+
         🟢 Activa
 
         ---
@@ -4095,7 +3995,7 @@ with st.expander(
 
         ### CAPA 3 — Feature Engineering
 
-        Histórico anterior
+        Histórico anterior al partido
         ↓
         Forma reciente
         ↓
@@ -4103,7 +4003,9 @@ with st.expander(
         ↓
         Puntos
         ↓
-        Victorias / derrotas
+        Victorias
+        ↓
+        Derrotas
         ↓
         Diferencias
 
@@ -4111,7 +4013,7 @@ with st.expander(
 
         ---
 
-        ### CAPA 4 — Dataset
+        ### CAPA 4 — Dataset de entrenamiento
 
         Variables pre-partido
         +
@@ -4121,27 +4023,31 @@ with st.expander(
 
         ---
 
-        ### CAPA 5 — Modelo
+        ### CAPA 5 — Modelo predictivo
 
+        Dataset histórico
+        ↓
         Regresión logística
         ↓
         Validación temporal
         ↓
-        Probabilidad propia
+        Probabilidades
 
         🟢 Activa
 
         ---
 
-        ### CAPA 6 — Mercado
+        ### CAPA 6 — Mercado real
 
         Odds-API.io
         ↓
-        Bet365 / Unibet
+        Eventos
         ↓
-        Matching
+        Matching de equipos
         ↓
-        Cuotas reales
+        Mercado 1X2
+        ↓
+        Cuotas decimales
 
         🟢 Activa
 
@@ -4161,37 +4067,37 @@ with st.expander(
         ↓
         Value Score
 
-        🟢 FASE 13 ACTIVA
+        🟢 Activa
 
         ---
 
         ### CAPA 8 — Ranking
 
-        Todas las oportunidades
+        Oportunidades cuantitativas
         ↓
-        Mejor cuota
+        Ordenamiento por Value Score
         ↓
-        Mayor Value Score
+        TOP 1
 
-        🟢 FASE 13 ACTIVA
+        🟢 Activa
 
         ---
 
-        ### CAPA 9 — Backtesting
+        ### CAPA 9 — Dashboard
 
+        Datos
+        +
         Histórico
-        ↓
-        Predicción
-        ↓
-        Cuota histórica
-        ↓
-        Value
-        ↓
-        Resultado
-        ↓
-        ROI
+        +
+        Modelo
+        +
+        Mercado
+        +
+        Motor Quant
+        +
+        Ranking
 
-        🟡 SIGUIENTE FASE
+        🟢 Activa
         """
     )
 
@@ -4204,5 +4110,5 @@ st.divider()
 
 st.caption(
     "Centro de Mando Quant · "
-    "Sports Data Hub · FASE 13"
+    "Sports Data Hub · FASE 14"
 )
